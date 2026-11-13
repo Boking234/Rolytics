@@ -175,7 +175,18 @@ def _breakdown_table(conn: sqlite3.Connection, universe_id: int, metric: str, da
     return f"<details><summary>Split on {day}</summary><table>{body}</table></details>"
 
 
-def html_report(conn: sqlite3.Connection, universe_id: int, days: int = 90) -> str:
+def html_report(conn: sqlite3.Connection, universe_id: int, check=None, days: int = 90) -> str:
+    """One calm page: today's status and top 3 first, everything else folded away."""
+    from . import checkup as _checkup  # local import avoids a cycle
+    check = check or _checkup.run(conn, universe_id)
+    tone = {"All good": "good", "Watch": "watch", "Act now": "act"}.get(check.status, "none")
+    items = "".join(
+        f'<li class="{"win" if f.good else "issue"}"><span class="tag">{"Good" if f.good else "Issue"}</span>'
+        f"{html.escape(f.line().split(': ', 1)[1])}</li>" for f in check.top)
+    if not items and check.checked:
+        items = f'<li class="win"><span class="tag">Calm</span>No unusual changes across {check.checked} metrics.</li>'
+    notes = "".join(f'<p class="muted">{html.escape(n)}</p>' for n in check.notes)
+
     cards = []
     for s in summarize(conn, universe_id):
         rows = _series(conn, universe_id, s.metric)[-days:]
@@ -183,42 +194,57 @@ def html_report(conn: sqlite3.Connection, universe_id: int, days: int = 90) -> s
             f"<tr><td>{r['bucket_time'][:10]}</td><td>{fmt(r['value'])}</td>"
             f"<td class='muted'>{html.escape(STATUS_NOTE.get(r['status'] or '', ''))}</td></tr>"
             for r in reversed(rows[-14:]))
-        change = "" if s.change_pct is None else f"{s.change_pct:+.1f}% vs previous 7 days"
+        change = "" if s.change_pct is None else f"{s.change_pct:+.1f}% vs last week"
         cards.append(f"""
 <section class="card">
-  <h2>{html.escape(s.label)} <small>{html.escape(s.metric)}</small></h2>
+  <h3>{html.escape(s.label)}</h3>
   <p class="big">{fmt(s.last_value)} <span class="unit">{html.escape(s.unit)}</span></p>
-  <p class="muted">Latest day {s.last_day} · 7-day average {fmt(s.avg_7d)} {change}</p>
+  <p class="muted">{s.last_day} · {change}</p>
   {_sparkline(rows)}
   <details><summary>Last 14 days</summary><table>{recent}</table></details>
   {_breakdown_table(conn, universe_id, s.metric, s.last_day)}
-  <p class="muted">Check against: Creator Dashboard &gt; {html.escape(s.dashboard_page or 'Analytics')}</p>
+  <p class="muted small">Dashboard: {html.escape(s.dashboard_page or 'Analytics')} · {html.escape(s.metric)}</p>
 </section>""")
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    body = "".join(cards) or "<p>No data yet. Run <code>roblox-agent pull</code> first.</p>"
+    grid = "".join(cards) or "<p>No data yet. Run <code>roblox-agent</code> first.</p>"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Game analytics</title>
+<title>Game check-up</title>
 <style>
-:root {{ --bg:#f7f7f5; --card:#fff; --ink:#1d1d1f; --muted:#6b6b70; --line:#2f6fde; --warn:#d98a00; --bad:#c23b3b; --rule:#e4e4e0; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg:#141416; --card:#1e1e21; --ink:#ececee; --muted:#9a9aa0; --line:#6ea0ff; --warn:#f0b040; --bad:#ff7a7a; --rule:#2c2c30; }} }}
-body {{ margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, sans-serif; }}
-main {{ max-width:1100px; margin:0 auto; padding:24px 16px; }}
-.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; }}
-.card {{ background:var(--card); border:1px solid var(--rule); border-radius:12px; padding:16px; }}
-h1 {{ margin:0 0 4px; font-size:22px; }} h2 {{ margin:0; font-size:16px; }}
-h2 small {{ color:var(--muted); font-weight:400; font-size:12px; }}
-.big {{ font-size:28px; margin:8px 0 0; font-weight:600; }} .unit {{ font-size:14px; color:var(--muted); font-weight:400; }}
-.muted {{ color:var(--muted); font-size:13px; }}
+:root {{ --bg:#f6f6f4; --card:#fff; --ink:#1b1b1d; --muted:#6b6b70; --line:#2f6fde; --rule:#e4e4e0;
+  --good:#1f8a4c; --watch:#b7791f; --act:#c23b3b; --none:#6b6b70; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg:#131315; --card:#1d1d20; --ink:#ececee; --muted:#9a9aa0;
+  --line:#6ea0ff; --rule:#2c2c30; --good:#4cc47f; --watch:#f0b040; --act:#ff7a7a; }} }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }}
+main {{ max-width:760px; margin:0 auto; padding:32px 16px 64px; }}
+.status {{ font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--{tone}); font-weight:600; margin:0; }}
+h1 {{ font-size:30px; margin:4px 0 4px; }}
+.top {{ list-style:none; padding:0; margin:20px 0 8px; }}
+.top li {{ background:var(--card); border:1px solid var(--rule); border-left:4px solid var(--good); border-radius:10px;
+  padding:12px 14px; margin-bottom:10px; }}
+.top li.issue {{ border-left-color:var(--act); }}
+.tag {{ display:inline-block; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--muted); margin-right:8px; }}
+.muted {{ color:var(--muted); font-size:13px; margin:4px 0; }} .small {{ font-size:11px; }}
+details.all > summary {{ margin-top:28px; font-weight:600; cursor:pointer; }}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; margin-top:12px; }}
+.card {{ background:var(--card); border:1px solid var(--rule); border-radius:10px; padding:14px; }}
+h3 {{ margin:0; font-size:14px; font-weight:600; }}
+.big {{ font-size:24px; margin:6px 0 0; font-weight:600; }} .unit {{ font-size:13px; color:var(--muted); font-weight:400; }}
 .chart {{ width:100%; height:auto; margin-top:8px; }} .line {{ fill:none; stroke:var(--line); stroke-width:2; }}
-.dot-proj {{ fill:var(--warn); }} .dot-nss {{ fill:var(--bad); }}
+.dot-proj {{ fill:var(--watch); }} .dot-nss {{ fill:var(--act); }}
 .axis {{ display:flex; justify-content:space-between; font-size:11px; color:var(--muted); }}
 table {{ width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }}
 td {{ padding:3px 4px; border-bottom:1px solid var(--rule); }} summary {{ cursor:pointer; margin-top:8px; font-size:13px; }}
 </style></head><body><main>
-<h1>Game analytics, Universe ID {universe_id}</h1>
-<p class="muted">Made on your computer from your local database at {generated}. Days are in UTC, like the Creator Dashboard.
-Orange dots are Roblox estimates that may change; red dots had too few players to trust.</p>
-<div class="grid">{body}</div>
+<p class="status">{html.escape(check.status)}</p>
+<h1>Today's check-up</h1>
+<p class="muted">Data through {html.escape(check.day or '-')} (UTC) · game {universe_id}</p>
+<ul class="top">{items}</ul>
+{notes}
+<details class="all"><summary>All metrics</summary>
+<p class="muted">Orange dots: Roblox estimate, may change. Red dots: too few players to trust. Made {generated} on your computer.</p>
+<div class="grid">{grid}</div></details>
 </main></body></html>"""

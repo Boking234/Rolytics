@@ -1,23 +1,39 @@
-"""Command line: ``roblox-agent <command>``. Run ``roblox-agent --help``."""
+"""Command line.
+
+Most people only ever need:
+    roblox-agent            today's check-up (sets things up the first time)
+    roblox-agent view       the same, as a page with charts
+    roblox-agent connect    pick the AI agent to use (Claude, Codex, ...)
+"""
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 import webbrowser
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import __version__, catalog, config, db, ingest, report
+from . import __version__, catalog, checkup, config, connect, db, ingest, report
 from .api import AnalyticsClient, ApiError, AuthError
 from .demo import FakeRoblox
 
 DEMO_UNIVERSE = 1
+STALE_HOURS = 20
+MAX_BACKFILL_DAYS = 730  # Roblox only allows daily data for ranges up to 2 years
 
 
 def _say(msg: str = "") -> None:
     print(msg, flush=True)
+
+
+def _ask(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except EOFError:
+        return ""
 
 
 def _client(cfg: config.Config) -> AnalyticsClient:
@@ -26,18 +42,18 @@ def _client(cfg: config.Config) -> AnalyticsClient:
     return AnalyticsClient(api_key=cfg.api_key, universe_id=cfg.universe_id)
 
 
-def _test_connection(client: AnalyticsClient) -> bool:
+def _test_connection(client: AnalyticsClient, quiet: bool = False) -> bool:
     end = ingest.today_utc()
     start = end - timedelta(days=7)
     try:
         op = client.query_metric("DailyActiveUsers", "OneDay", ingest._iso(start), ingest._iso(end))
-    except AuthError as e:
-        _say(f"Connection failed: {e}")
-        return False
     except ApiError as e:
-        _say(f"Connection failed: {e}")
+        _say(f"  Not connected: {e}")
         return False
     points = [dp for s in op.get("response", {}).get("values", []) for dp in s.get("dataPoints", [])]
+    if quiet:
+        _say(f"  Connected. Roblox sent {len(points)} days of player counts.")
+        return True
     _say(f"Connected. Roblox returned {len(points)} days of daily active users:")
     for dp in points:
         note = report.STATUS_NOTE.get(dp.get("status", ""), "")
@@ -45,15 +61,79 @@ def _test_connection(client: AnalyticsClient) -> bool:
     return True
 
 
+def _stale(conn, uid: int) -> bool:
+    row = conn.execute("SELECT MAX(started_at) AS t FROM pull_runs WHERE universe_id=? AND status!='failed'",
+                       (uid,)).fetchone()
+    if not row or not row["t"]:
+        return True
+    last = datetime.fromisoformat(row["t"].replace("Z", "+00:00"))
+    return datetime.now(timezone.utc) - last > timedelta(hours=STALE_HOURS)
+
+
+def _do_pull(client: AnalyticsClient, conn, metrics=None, backfill_days: int = 365, verbose: bool = False) -> bool:
+    first = conn.execute("SELECT COUNT(*) FROM data_points WHERE universe_id=?", (client.universe_id,)).fetchone()[0] == 0
+    if first:
+        _say("Downloading your game's history (first time only, a few minutes)...")
+    else:
+        _say("Getting the latest numbers from Roblox...")
+    jobs = [0]
+    total = sum(len(s.breakdowns) for s in (metrics or catalog.DEFAULT_METRICS))
+
+    def progress(msg: str) -> None:
+        if verbose:
+            _say(msg)
+        elif not msg.startswith("  "):
+            jobs[0] += 1
+            print(f"\r  {jobs[0]}/{total}", end="", flush=True)
+
+    try:
+        result = ingest.pull(client, conn, metrics or catalog.DEFAULT_METRICS, backfill_days, progress=progress)
+    except AuthError as e:
+        _say(f"\nStopped: {e}")
+        return False
+    if not verbose:
+        print("\r", end="")
+    if result.errors:
+        _say(f"  {len(result.errors)} item(s) skipped (details: roblox-agent pull --details).")
+        if verbose:
+            for e in result.errors:
+                _say("  - " + e)
+    return result.status != "failed"
+
+
+def _print_checkup(conn, uid: int) -> None:
+    c = checkup.run(conn, uid)
+    _say()
+    _say(c.text())
+    _say()
+    _say("More: roblox-agent view")
+
+
+# ------------------------------------------------------------ commands ---
+
+def cmd_home(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    if not cfg.universe_id or not cfg.api_key:
+        _say("Welcome! Let's connect your game. This takes about 2 minutes.\n")
+        return cmd_setup(args)
+    conn = db.connect(config.db_path())
+    if _stale(conn, cfg.universe_id):
+        _do_pull(_client(cfg), conn)
+    _print_checkup(conn, cfg.universe_id)
+    return 0
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     cfg = config.load()
-    _say("Setup. Your answers are saved only on this computer, in " + str(config.home_dir()))
-    _say()
+    if os.environ.get(config.KEY_ENV):
+        _say(f"Note: the {config.KEY_ENV} environment variable is set, so it will be used instead of "
+             "the key you save here.\n")
+
+    _say("Step 1 of 3: your game")
+    _say("  Open create.roblox.com/dashboard/creations, click your game, and copy the page link.")
     while True:
-        prompt = "Universe ID (or paste your game's Creator Dashboard link)"
-        if cfg.universe_id:
-            prompt += f" [{cfg.universe_id}]"
-        raw = input(prompt + ": ").strip()
+        hint = f" [{cfg.universe_id}]" if cfg.universe_id else ""
+        raw = _ask(f"  Paste the link or Universe ID{hint}: ").strip()
         if not raw and cfg.universe_id:
             uid = cfg.universe_id
             break
@@ -61,20 +141,70 @@ def cmd_setup(args: argparse.Namespace) -> int:
             uid = config.parse_universe_id(raw)
             break
         except ValueError as e:
-            _say(str(e))
-    config.save_universe_id(uid)
-    _say()
-    if cfg.api_key and input("An API key is already saved. Replace it? [y/N]: ").strip().lower() != "y":
+            _say("  " + str(e))
+            if not raw:
+                return 1
+
+    _say("\nStep 2 of 3: your API key")
+    key = None
+    if cfg.api_key and _ask("  A key is already saved. Keep it? [Y/n]: ").strip().lower() != "n":
         key = cfg.api_key
-    else:
-        _say("Paste your API key. It will not show on screen while you paste; press Enter after.")
-        key = getpass.getpass("API key: ").strip()
+    while key is None:
+        _say("  Guide: docs/SETUP_GUIDE.md, step 4. Only tick 'universe.analytics:read'.")
+        _say("  Paste the key and press Enter. (It stays hidden while you paste. That's normal.)")
+        typed = getpass.getpass("  API key: ").strip()
+        if not typed:
+            return 1
+        if len(typed) < 20 or any(c.isspace() for c in typed):
+            _say("  That doesn't look like a full key. Use 'Copy Key to Clipboard' on Roblox and paste again.")
+            continue
+        key = typed
+    client = AnalyticsClient(api_key=key, universe_id=uid)
+    _say("  Checking with Roblox...")
+    if not _test_connection(client, quiet=True):
+        _say("  Nothing was saved. Check the key has your game and 'universe.analytics:read', then try again.")
+        return 1
+    config.save_universe_id(uid)
+    if key != cfg.api_key:
         config.save_api_key(key)
-    _say("Saved. Testing the connection...")
-    ok = _test_connection(AnalyticsClient(api_key=key, universe_id=uid))
-    if ok:
-        _say("\nAll set. Next run:  roblox-agent pull")
+    _say("  Saved on this computer only.")
+
+    conn = db.connect(config.db_path())
+    _do_pull(client, conn)
+
+    _say("\nStep 3 of 3: your AI helper (optional)")
+    _choose_agent(skip_allowed=True)
+
+    _print_checkup(conn, uid)
+    return 0
+
+
+def _choose_agent(skip_allowed: bool = False, choice: str | None = None) -> int:
+    if choice is None:
+        _say("  Which AI agent should read your check-ups?")
+        for i, a in enumerate(connect.AGENTS, 1):
+            _say(f"   {i}. {a.label}")
+        if skip_allowed:
+            _say("   Enter = skip for now (run 'roblox-agent connect' later)")
+        choice = _ask("  Number: ").strip()
+    if not choice:
+        return 0
+    agent = connect.BY_KEY.get(choice)
+    if agent is None and choice.isdigit() and 1 <= int(choice) <= len(connect.AGENTS):
+        agent = connect.AGENTS[int(choice) - 1]
+    if agent is None:
+        _say("  Unknown choice. Options: " + ", ".join(a.key for a in connect.AGENTS))
+        return 1
+    ok, msg = connect.connect(agent)
+    _say("  " + msg.replace("\n", "\n  "))
+    if ok and agent.kind != "manual":
+        config.save_setting("agent", agent.key)
+        _say(f"  Then ask {agent.label}: \"Run my Roblox daily check-up\".")
     return 0 if ok else 1
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    return _choose_agent(choice=args.agent)
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -91,24 +221,13 @@ def cmd_pull(args: argparse.Namespace) -> int:
     cfg = config.load()
     client = _client(cfg)
     conn = db.connect(config.db_path())
-    _say(f"Pulling analytics for Universe ID {client.universe_id}. The first run backfills "
-         f"{args.backfill_days} days and can take a few minutes.")
-    try:
-        result = ingest.pull(client, conn, _pick_metrics(args.metrics), args.backfill_days, progress=_say)
-    except AuthError as e:
-        _say(f"\nStopped: {e}")
-        return 1
-    _say()
-    _say(f"Done ({result.status}). Saved {result.points} values to {config.db_path()}")
-    if result.errors:
-        _say(f"{len(result.errors)} item(s) were skipped:")
-        for e in result.errors:
-            _say("  - " + config.redact(e, cfg.api_key))
-    _say("See it with:  roblox-agent view   (or roblox-agent show)")
-    return 0 if result.status != "failed" else 1
+    days = max(1, min(args.backfill_days, MAX_BACKFILL_DAYS))
+    ok = _do_pull(client, conn, _pick_metrics(args.metrics), days, verbose=args.details)
+    _say("Done." if ok else "Pull failed.")
+    return 0 if ok else 1
 
 
-def _open_db(demo: bool) -> tuple[object, int]:
+def _open_db(demo: bool):
     if demo:
         return db.connect(config.db_path(demo=True)), DEMO_UNIVERSE
     cfg = config.load()
@@ -125,8 +244,8 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def _write_view(conn, uid: int, out: Path, open_it: bool) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report.html_report(conn, uid), encoding="utf-8")
-    _say(f"Report saved to {out}")
+    out.write_text(report.html_report(conn, uid, checkup.run(conn, uid)), encoding="utf-8")
+    _say(f"Page saved to {out}")
     if open_it:
         webbrowser.open(out.resolve().as_uri())
 
@@ -151,14 +270,18 @@ def cmd_demo(args: argparse.Namespace) -> int:
     if path.exists():
         path.unlink()
     conn = db.connect(path)
-    client = AnalyticsClient(api_key="demo-key", universe_id=DEMO_UNIVERSE, transport=FakeRoblox(),
+    client = AnalyticsClient(api_key="demo-key", universe_id=DEMO_UNIVERSE, transport=FakeRoblox(incident=True),
                              sleep=lambda _s: None)
-    _say("Making a practice database with pretend numbers (no internet, no key needed)...")
-    result = ingest.pull(client, conn, backfill_days=120)
-    _say(f"Saved {result.points} pretend values.\n")
-    _say(report.text_summary(conn, DEMO_UNIVERSE))
-    _say()
+    _say("Practice mode: made-up numbers, no internet, no key.")
+    ingest.pull(client, conn, backfill_days=120)
+    _print_checkup(conn, DEMO_UNIVERSE)
     _write_view(conn, DEMO_UNIVERSE, config.home_dir() / "demo-report.html", not args.no_open)
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from . import mcp_server
+    mcp_server.serve()
     return 0
 
 
@@ -173,50 +296,68 @@ def cmd_where(args: argparse.Namespace) -> int:
     _say(f"Database    : {config.db_path()}")
     _say(f"Universe ID : {cfg.universe_id or 'not set'}")
     _say(f"API key     : {'saved' if cfg.api_key else 'not saved'} (never shown)")
+    _say(f"AI agent    : {cfg.agent or 'not connected'}")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="roblox-agent",
-                                description="Pull your Roblox game's analytics into a local database.")
+    p = argparse.ArgumentParser(
+        prog="roblox-agent",
+        description="Daily check-up for your Roblox game. Run with no command to see today's top 3.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", metavar="command")
+    p.set_defaults(func=cmd_home)
 
-    sub.add_parser("setup", help="save your Universe ID and API key, then test them").set_defaults(func=cmd_setup)
-    sub.add_parser("check", help="test the connection to Roblox").set_defaults(func=cmd_check)
-
-    pp = sub.add_parser("pull", help="download the latest analytics into the local database")
-    pp.add_argument("--backfill-days", type=int, default=ingest.DEFAULT_BACKFILL_DAYS,
-                    help="how far back to go on the first run (default 365)")
-    pp.add_argument("--metrics", help="comma-separated metric names (default: the standard set)")
-    pp.set_defaults(func=cmd_pull)
-
-    for name, fn, helptext in (("show", cmd_show, "print a summary of the stored data"),
-                               ("view", cmd_view, "open a report page with charts in your browser"),
-                               ("export", cmd_export, "save all stored data as a CSV spreadsheet")):
-        sp = sub.add_parser(name, help=helptext)
-        sp.add_argument("--demo", action="store_true", help="use the practice database")
-        if name in ("view", "export"):
-            sp.add_argument("--out", help="where to save the file")
-        if name == "view":
-            sp.add_argument("--no-open", action="store_true", help="don't open the browser")
-        sp.set_defaults(func=fn)
-
-    dp = sub.add_parser("demo", help="try everything with pretend data (no key needed)")
+    sub.add_parser("setup", help="connect your game (and an AI agent)").set_defaults(func=cmd_setup)
+    sp = sub.add_parser("view", help="open the check-up with charts in your browser")
+    sp.add_argument("--demo", action="store_true", help="use the practice data")
+    sp.add_argument("--out", help="where to save the page")
+    sp.add_argument("--no-open", action="store_true", help="don't open the browser")
+    sp.set_defaults(func=cmd_view)
+    cp = sub.add_parser("connect", help="choose the AI agent to use (Claude, Codex, Cursor...)")
+    cp.add_argument("agent", nargs="?", choices=[a.key for a in connect.AGENTS], help="skip the menu")
+    cp.set_defaults(func=cmd_connect)
+    dp = sub.add_parser("demo", help="try it with made-up numbers (no key needed)")
     dp.add_argument("--no-open", action="store_true")
     dp.set_defaults(func=cmd_demo)
-    sub.add_parser("forget-key", help="delete the saved API key").set_defaults(func=cmd_forget_key)
-    sub.add_parser("where", help="show where your data and settings are").set_defaults(func=cmd_where)
+
+    pp = sub.add_parser("pull", help="(advanced) download the latest data now")
+    pp.add_argument("--backfill-days", type=int, default=ingest.DEFAULT_BACKFILL_DAYS,
+                    help="how far back the first run goes (max 730, default 365)")
+    pp.add_argument("--metrics", help="comma-separated metric names")
+    pp.add_argument("--details", action="store_true", help="show every step")
+    pp.set_defaults(func=cmd_pull)
+    for name, fn, helptext in (("show", cmd_show, "(advanced) table of all stored metrics"),
+                               ("export", cmd_export, "(advanced) save everything as a CSV spreadsheet")):
+        sp = sub.add_parser(name, help=helptext)
+        sp.add_argument("--demo", action="store_true")
+        if name == "export":
+            sp.add_argument("--out")
+        sp.set_defaults(func=fn)
+    sub.add_parser("check", help="(advanced) test the API key").set_defaults(func=cmd_check)
+    sub.add_parser("where", help="(advanced) where data and settings live").set_defaults(func=cmd_where)
+    sub.add_parser("forget-key", help="(advanced) delete the saved API key").set_defaults(func=cmd_forget_key)
+    sub.add_parser("mcp", help="(advanced) run the AI agent server; agents start this themselves"
+                   ).set_defaults(func=cmd_mcp)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:  # Windows consoles: never crash on an unusual character
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args) or 0)
     except KeyboardInterrupt:
         _say("\nCancelled.")
         return 130
+    except (ApiError, OSError, ValueError) as e:
+        # Friendly one-line error, with the key scrubbed just in case.
+        _say(f"\nSomething went wrong: {config.redact(str(e), config.load().api_key)}")
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

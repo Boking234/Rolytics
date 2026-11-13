@@ -46,12 +46,13 @@ class FakeRoblox:
 
     def __init__(self, today: datetime | None = None, slow_metrics: set[str] | None = None,
                  reject_metrics: set[str] | None = None, budget_limit_days: int | None = None,
-                 valid_key: str = "demo-key"):
+                 valid_key: str = "demo-key", incident: bool = False):
         self.today = today
         self.slow = slow_metrics or set()
         self.reject = reject_metrics or set()
         self.budget_limit_days = budget_limit_days
         self.valid_key = valid_key
+        self.incident = incident  # demo: phones start crashing much more on the latest day
         self.pending: dict[str, dict[str, Any]] = {}
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
@@ -97,8 +98,11 @@ class FakeRoblox:
             points = []
             for i in range(days):
                 day = start + timedelta(days=i)
-                dp: dict[str, Any] = {"time": day.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                      "value": _value(metric, day, split)}
+                value = _value(metric, day, split)
+                if (self.incident and i == days - 1 and metric == "ClientCrashRate15m"
+                        and split in (None, "Platform=Phone")):
+                    value = round(value * (3.0 if split else 1.8), 4)
+                dp: dict[str, Any] = {"time": day.strftime("%Y-%m-%dT%H:%M:%SZ"), "value": value}
                 if i >= days - 2:
                     dp["status"] = "Projected"
                 elif split and split.endswith("Console"):

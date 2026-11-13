@@ -68,7 +68,15 @@ def urllib_transport(method: str, url: str, headers: dict[str, str],
         raw = e.read() if e.fp else b""
         return Response(e.code, _parse_json(raw))
     except urllib.error.URLError as e:
-        raise ApiError(f"Could not reach Roblox ({e.reason}). Check your internet connection.") from None
+        reason = str(e.reason)
+        if "CERTIFICATE_VERIFY_FAILED" in reason:
+            raise ApiError(
+                "Your computer couldn't verify Roblox's security certificate. On a Mac, open the "
+                "Python folder in Applications and double-click 'Install Certificates.command', "
+                "then try again.") from None
+        raise ApiError(f"Could not reach Roblox ({reason}). Check your internet connection.") from None
+    except (TimeoutError, OSError) as e:
+        raise ApiError(f"Roblox didn't answer in time ({type(e).__name__}). Try again in a minute.") from None
 
 
 def _parse_json(raw: bytes) -> dict[str, Any]:

@@ -44,6 +44,7 @@ def db_path(demo: bool = False) -> Path:
 class Config:
     universe_id: int | None = None
     api_key: str | None = field(default=None, repr=False)
+    agent: str | None = None
 
     def __repr__(self) -> str:
         return f"Config(universe_id={self.universe_id}, api_key={'***' if self.api_key else None})"
@@ -68,21 +69,35 @@ def parse_universe_id(text: str) -> int:
 
 def load() -> Config:
     cfg = Config()
-    p = config_path()
-    if p.exists():
-        data = json.loads(p.read_text(encoding="utf-8") or "{}")
-        if data.get("universe_id"):
-            cfg.universe_id = int(data["universe_id"])
+    config_path()
+    data = _read_config()
+    if str(data.get("universe_id", "")).isdigit():
+        cfg.universe_id = int(data["universe_id"])
+    cfg.agent = data.get("agent")
     cfg.api_key = os.environ.get(KEY_ENV) or _read_secret()
     return cfg
 
 
-def save_universe_id(universe_id: int) -> None:
-    home_dir().mkdir(parents=True, exist_ok=True)
+def _read_config() -> dict:
     p = config_path()
-    data = json.loads(p.read_text(encoding="utf-8") or "{}") if p.exists() else {}
-    data["universe_id"] = int(universe_id)
-    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+    except ValueError:
+        return {}  # damaged file: treat as not set up rather than crashing
+    return data if isinstance(data, dict) else {}
+
+
+def save_setting(name: str, value) -> None:
+    home_dir().mkdir(parents=True, exist_ok=True)
+    data = _read_config()
+    data[name] = value
+    config_path().write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def save_universe_id(universe_id: int) -> None:
+    save_setting("universe_id", int(universe_id))
 
 
 def save_api_key(key: str) -> None:
@@ -91,6 +106,8 @@ def save_api_key(key: str) -> None:
         raise ValueError("The API key was empty.")
     if any(c.isspace() for c in key):
         raise ValueError("The API key has spaces or line breaks in it; copy it again.")
+    if len(key) < 20:
+        raise ValueError("That's too short to be a Roblox API key; use 'Copy Key to Clipboard' and paste again.")
     home_dir().mkdir(parents=True, exist_ok=True)
     p = secrets_path()
     # Create the file readable/writable by the owner only, then write.
