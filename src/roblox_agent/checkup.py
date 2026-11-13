@@ -32,14 +32,16 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from . import catalog, db, detect
+from . import catalog, checks, db, detect
 from .detect import Signal
 
 NSS = detect.NSS
 STATUSES = ("Act now", "Watch", "All good", "No data")
 SUDDEN = ("spike", "shift")
 CONF_FACTOR = {"high": 1.0, "medium": 0.75, "low": 0.5}
-KIND_FACTOR = {"spike": 1.0, "shift": 1.0, "trend": 0.7, "budget": 0.5}
+KIND_FACTOR = {"spike": 1.0, "shift": 1.0, "trend": 0.7, "level": 0.7, "budget": 0.5}
+SLOW = ("trend", "level")
+FAMILY_HEAD = ("DailyActiveUsers", "ForwardD1Retention", "DailyRevenue", "ClientCrashRate15m")
 REPEAT_DAMPING = 0.6      # after 3 days on the list, an ongoing item sinks a little
 LEARNING_DAYS = 24        # days of history before the checks are fully tuned
 DEFAULT_REACH = 0.25
@@ -65,6 +67,8 @@ def fmt_value(spec: catalog.MetricSpec, v: float) -> str:
         return f"{pct:.2f}%" if abs(pct) < 1 else f"{pct:.1f}%"
     if spec.count:
         return f"{v:.0f}" if v >= 10 or v == int(v) else f"{v:.1f}"
+    if spec.unit in ("players", "visits", "people") and abs(v) >= 20:
+        return f"{v:,.0f}"
     unit = {"fps": " fps", "MB": " MB", "min": " min", "Robux": " Robux"}.get(spec.unit, "")
     return _num(v) + unit
 
@@ -97,6 +101,7 @@ class Finding:
     severity: str = "watch"   # act | watch | good
     affected: float | None = None  # rough players per day, when it can be estimated
     corroborated: bool = False     # a device finding the whole-game numbers back up
+    why: str = ""                  # for player declines: new vs returning players
 
     # Short names used by the report, the self-test and older code.
     metric = property(lambda self: self.sig.metric)
@@ -121,6 +126,16 @@ class Finding:
         if s.kind == "trend":
             word = "climbing" if s.rel > 0 else "sliding"
             text = f"{spec.label}{where} {word} for {s.days} weeks: {val} vs {usual} ({chg})"
+            if s.detail:
+                text += f", {s.detail}"
+        elif s.kind == "level":
+            word = "up" if s.rel > 0 else "down"
+            if s.detail:  # a clear start day
+                text = (f"{spec.label}{where} {word} and staying {word}: {val} over the last 2 weeks vs {usual} "
+                        f"before ({chg}), {s.detail}")
+            else:
+                text = (f"{spec.label}{where} {word} over the last 4 weeks: {val} vs {usual} the 4 weeks "
+                        f"before ({chg})")
         elif s.kind == "budget":
             side = "below" if s.rel < 0 else "above"
             text = (f"{spec.label}{where} {val}, {side} the {usual} rule of thumb on {s.days} of the "
@@ -131,6 +146,8 @@ class Finding:
         parts = [text]
         if self.note:
             parts.append(self.note)
+        if self.why:
+            parts.append(self.why)
         if self.impact:
             parts.append(self.impact[0].upper() + self.impact[1:])
         tail = f"Confidence {s.confidence}" + (", early estimate" if s.provisional else "")
@@ -226,7 +243,8 @@ def _impact(sig: Signal, players: dict[str, float]) -> tuple[str, float | None]:
 
 def _key(sig: Signal) -> str:
     k = f"{sig.metric}|{sig.split}|{'up' if sig.rel > 0 else 'down'}"
-    return k + ("|" + sig.kind if sig.kind in ("trend", "budget") else "")
+    kind = "trend" if sig.kind in SLOW else sig.kind  # one slow story per metric, whichever check saw it
+    return k + ("|" + kind if kind in ("trend", "budget") else "")
 
 
 def _split_name(split: str) -> str:
@@ -314,8 +332,10 @@ def _merge_splits(sigs: list[Signal], players: dict[str, float],
                 if backed:
                     f.note = f"Whole game {fmt_change(lean.spec, lean.value, lean.usual, lean.rel)}"
                 out.append(f)
-        if not sudden:
-            out += [Finding(s, _key(s)) for s in group if s.kind == "trend"]
+        slow = [s for s in group if s.kind in SLOW]
+        if slow and not sudden:  # the 12-week slide and the 4-week comparison tell one story: keep the bigger
+            top_slow = max(slow, key=lambda s: abs(s.rel))
+            out.append(Finding(top_slow, _key(top_slow)))
         budgets = [s for s in group if s.kind == "budget"]
         if budgets and not sudden:  # only the worst one per metric, and only if nothing sudden says it already
             worst = max(budgets, key=lambda s: abs(s.rel))
@@ -336,7 +356,7 @@ def _severity(f: Finding, total_players: float) -> str:
     s = f.sig
     if s.good:
         return "good"
-    if s.kind not in SUDDEN or s.spec.weight < 2 or f.reach < 0.1:
+    if s.kind not in SUDDEN or s.spec.weight < 2 or f.reach < 0.1 or s.learning:
         return "watch"
     share = 0.005 if s.spec.weight >= 3 else 0.01
     if f.affected is not None and f.affected < max(5, share * total_players):
@@ -352,7 +372,8 @@ def _severity(f: Finding, total_players: float) -> str:
 def _group_families(findings: list[Finding]) -> list[Finding]:
     """Keep the strongest finding per family and direction; mention the rest under 'Also'."""
     best: dict[tuple[str, bool], Finding] = {}
-    for f in sorted(findings, key=lambda f: -f.score):
+    # The family's main number leads when scores are close ("players down", not "peak players down").
+    for f in sorted(findings, key=lambda f: -f.score * (1.5 if f.metric in FAMILY_HEAD else 1.0)):
         k = (f.sig.spec.family, f.good)
         if k in best:
             best[k].also.append(f.short())
@@ -380,7 +401,11 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
     checked = 0
     latest: date | None = None
     history_days = None
+    tuning = checks.load(conn, universe_id, today)
+    active = tuning.active()
     for spec in catalog.DEFAULT_METRICS:
+        if spec.context:
+            continue  # only used to explain other findings
         for key in _series_keys(conn, universe_id, spec):
             pts = detect.load_series(conn, universe_id, spec.name, key)
             if not pts:
@@ -391,11 +416,15 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
                 if spec.name == "DailyActiveUsers":
                     history_days = len(pts)
             series[(spec.name, key)] = pts
-            exposure = dau if spec.count and not key else None
-            found = [detect.sudden(spec, pts, key, exposure=exposure), detect.budget(spec, pts, key)]
-            if not key:  # slow slides: whole game only (fewer false alarms)
-                found.append(detect.trend(spec, pts, key))
-            sigs += [s for s in found if s]
+            ctx = checks.Context(spec, key, pts, exposure=dau if spec.count and not key else None,
+                                 size=players.get(key) or (players.get("") if not key else None),
+                                 strict=tuning.strict(spec.name, key), limits=tuning.limits)
+            for chk in active:
+                if chk.whole_game_only and key:
+                    continue  # slow changes: whole game only (fewer false alarms)
+                sig = chk.run(ctx)
+                if sig:
+                    sigs.append(sig)
 
     findings = _merge_splits(sigs, players, series)
     journal = _journal(conn, universe_id)
@@ -410,6 +439,9 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
             f.reopened = row["state"] == "done"
             f.age = row["days_shown"] - (1 if row["last_shown"] == data_day else 0)
         f.impact, f.affected = _impact(f.sig, players)
+        if f.metric == "DailyActiveUsers" and not f.split and not f.good and f.sig.kind != "spike":
+            from . import why as why_mod  # local import: why uses this module's helpers
+            f.why = why_mod.short(conn, universe_id)
         f.score = _score(f)
         f.severity = _severity(f, players.get("", 0))
         visible.append(f)
@@ -535,10 +567,14 @@ def mark(conn: sqlite3.Connection, uid: int, item: int | str, action: str) -> st
     prefix = "|".join(key.split("|")[:2]) + "|"
     conn.execute("UPDATE findings SET state=?, state_until=?, updated_at=? WHERE universe_id=?"
                  " AND substr(key, 1, ?) = ?", (state, until, db.utcnow(), uid, len(prefix), prefix))
-    conn.commit()
     metric, split = key.split("|")[:2]
+    if action in ("done", "wrong"):  # remembered for good: this is how the checks adapt to your game
+        conn.execute("INSERT INTO feedback (universe_id, metric, split, action, day, created_at)"
+                     " VALUES (?, ?, ?, ?, ?, ?)", (uid, metric, split, action, row["data_day"], db.utcnow()))
+    conn.commit()
     name = catalog.get(metric).label + _where(split)
     return {"done": f"Marked '{name}' as fixed. I'll check in {DONE_GRACE_DAYS} days that it really is.",
             "snooze": f"Snoozed '{name}' for {SNOOZE_DAYS} days.",
-            "wrong": f"Noted that '{name}' was a false alarm. Hidden for {WRONG_DAYS} days.",
+            "wrong": f"Noted that '{name}' was a false alarm. Hidden for {WRONG_DAYS} days, and it will need "
+                     "stronger evidence from now on.",
             "open": f"'{name}' is back on the list."}[action]

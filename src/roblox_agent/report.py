@@ -197,9 +197,17 @@ def html_report(conn: sqlite3.Connection, universe_id: int, check=None, days: in
         rows = "".join(
             f'<tr><td>{html.escape(a.name)}</td><td class="v-{a.verdict.replace(" ", "")}">{html.escape(a.verdict)}'
             f'</td><td class="muted">{html.escape(a.detail)}</td></tr>' for a in wk.areas)
-        rest = "".join(f"<p>{html.escape(line)}</p>" for line in wk.text().splitlines()[2:])
+        rest = "".join(f"<p>{html.escape(line)}</p>" for line in wk.text().splitlines()[2:]
+                       if not line.startswith("Lifecycle:"))  # shown once, in the players section
         week_html = (f'<details class="all" open><summary>This week</summary><table class="score">{rows}</table>'
                      f"{rest}</details>")
+
+    from . import why as _why
+    story = _why.explain(conn, universe_id)
+    why_html = ""
+    if story:
+        lines = "".join(f"<p>{html.escape(line)}</p>" for line in story.text().splitlines())
+        why_html = f'<details class="all" open><summary>Players: where the game is heading</summary>{lines}</details>'
 
     cards = []
     for s in summarize(conn, universe_id):
@@ -260,6 +268,7 @@ td {{ padding:3px 4px; border-bottom:1px solid var(--rule); }} summary {{ cursor
 <p class="muted">Data through {html.escape(check.day or '-')} (UTC) · game {universe_id}</p>
 <ul class="top">{items}</ul>
 {notes}
+{why_html}
 {week_html}
 <details class="all"><summary>All metrics</summary>
 <p class="muted">Orange dots: Roblox estimate, may change. Red dots: too few players to trust. Made {generated} on your computer.</p>

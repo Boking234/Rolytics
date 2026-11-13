@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from statistics import NormalDist, median
 
-from . import catalog
+from . import catalog, priors
 from .stats import linear_trend, mad_sigma, mann_kendall
 
 _ND = NormalDist()
@@ -47,7 +47,10 @@ TREND_WEEKS = 12
 TREND_P = 0.05
 TREND_T = 3.0
 TREND_MIN_REL = 0.10
-FALLBACK_SIGMA = 0.15  # while still learning: only very big changes count
+FALLBACK_SIGMA = priors.FLAT  # while still learning, with no public evidence: only very big changes count
+CHANCE_FACTOR = 0.75
+LEARNING_Z = 4.0       # evidence needed while the game has under ~3 weeks of history
+BLEND_DAYS = 28        # the game's own wobble fully replaces the public-data guess after this many days
 
 # Rule-of-thumb limits. A metric past its limit for most of the last week is
 # flagged even if that is "normal" for the game. (metric, kind, limit)
@@ -69,7 +72,7 @@ class Point:
 class Signal:
     metric: str
     split: str           # '' = whole game, else e.g. 'Platform=Phone'
-    kind: str            # spike | shift | trend | budget
+    kind: str            # spike | shift | trend | level | budget
     since: date          # first affected day
     day: date            # last affected day
     value: float         # actual (mean over affected days)
@@ -81,6 +84,7 @@ class Signal:
     provisional: bool    # rests only on Roblox estimates
     confidence: str      # high | medium | low
     learning: bool = False
+    detail: str = ""     # extra words for the headline, e.g. when a slide started
 
     @property
     def spec(self) -> catalog.MetricSpec:
@@ -171,7 +175,7 @@ def _poisson_z(x: float, lam: float, disp: float) -> float:
 
 
 def _baseline(spec: catalog.MetricSpec, pts: list[Point], window: list[Point],
-              exposure: dict[date, float] | None):
+              exposure: dict[date, float] | None, size: float | None = None):
     """Expected values for the window days, and the size of normal wobble."""
     start = window[0].day
     hist = [p for p in pts if start - timedelta(days=HISTORY_DAYS) <= p.day < start]
@@ -198,10 +202,28 @@ def _baseline(spec: catalog.MetricSpec, pts: list[Point], window: list[Point],
         if len(prior) >= 7:
             resid.append(z_h[i] - median(prior))
     learning = len(resid) < 10
+    # Starting guess for the wobble: what public data says about games this
+    # size (see priors.py), or a flat 15% when there is no public evidence.
+    guess = priors.noise(spec.name, size, g(level) if f is math.log else None)
+    informed = guess is not None and f is math.log
+    rel_guess = guess if informed else priors.FLAT_BY_METRIC.get(spec.name, FALLBACK_SIGMA)
+    if spec.rate and size:
+        # A share of few players is jumpy by chance alone (3 buyers or 5 is luck, not news).
+        share = min(max(g(level), 1e-6), 0.99)
+        people = size * (priors.NEW_PLAYER_SHARE if "Retention" in spec.name else 1.0)
+        rel_guess = max(rel_guess, CHANCE_FACTOR * math.sqrt((1 - share) / (share * people)))
+    if informed and not week:
+        # The weekday rhythm isn't known yet (needs 3 weeks), so it counts as wobble for now.
+        rel_guess = math.hypot(rel_guess, priors.weekday_allowance(spec.name))
+    start_sigma = rel_guess * (1.0 if f is math.log else max(abs(level), 1e-9))
     if learning:
-        sigma = FALLBACK_SIGMA * (1.0 if f is math.log else max(abs(level), 1e-9))
+        sigma = start_sigma
     else:
         sigma = mad_sigma(resid) * math.sqrt(1 + 1 / len(z_h[-LEVEL_DAYS:]))  # level is an estimate too
+        if informed and len(resid) < BLEND_DAYS:
+            # Adapt: lean on the public-data guess at first, on the game's own history more every day.
+            w = 1 - len(resid) / BLEND_DAYS
+            sigma = math.sqrt(w * start_sigma ** 2 + (1 - w) * sigma ** 2)
     # Never assume less wobble than 1% (flat series such as a server capped at 60 fps).
     floor = 0.08 if spec.count else (0.01 if f is math.log else 0.005 * abs(level))
     sigma = max(sigma, floor, 1e-9)
@@ -217,25 +239,30 @@ def _baseline(spec: catalog.MetricSpec, pts: list[Point], window: list[Point],
             zs.append(_poisson_z(p.value, g(y_hat) * scale, disp))
         else:
             zs.append((f(adjust(p)) - y_hat) / sigma)
-    return expect, zs, learning
+    return expect, zs, learning, informed
 
 
 def sudden(spec: catalog.MetricSpec, pts: list[Point], split: str = "",
-           exposure: dict[date, float] | None = None, force_days: int | None = None) -> Signal | None:
+           exposure: dict[date, float] | None = None, force_days: int | None = None,
+           size: float | None = None, strict: float = 0.0) -> Signal | None:
     """Look for a spike or shift in the last few days.
 
     ``exposure``: daily players, for counts that grow with player numbers
     (more players = more out-of-memory exits, which is not a problem).
     ``force_days``: skip the tests and just measure the change over the last
     N days (used to say which device a whole-game change mostly comes from).
+    ``size``: typical players a day behind this number (for the public-data
+    starting guess of normal wobble). ``strict``: extra evidence required,
+    from the sensitivity setting and from past "false alarm" marks.
     """
     if len(pts) < MIN_DAYS:
         return None
     window = pts[-WINDOW:]
-    base = _baseline(spec, pts, window, exposure)
+    base = _baseline(spec, pts, window, exposure, size)
     if base is None:
         return None
-    expect, zs, learning = base
+    expect, zs, learning, informed = base
+    spike_z, shift_zc = SPIKE_Z + strict, SHIFT_ZC + strict
     sign = 1 if zs[-1] > 0 else -1
 
     if force_days:
@@ -251,18 +278,20 @@ def sudden(spec: catalog.MetricSpec, pts: list[Point], split: str = "",
             if min(seg) < -1.0:
                 break  # a clearly opposite day: the stretch can't reach further back
             if k == 1:
-                if seg[0] >= SPIKE_Z:
+                if seg[0] >= spike_z:
                     best_zc, n = seg[0], 1
                 continue
             if seg[-1] < 1.0 or sum(1 for z in seg if z >= 1.0) < 0.6 * k:
                 continue
             zc = sum(seg) / math.sqrt(k)
-            if zc >= SHIFT_ZC and zc > best_zc:
+            if zc >= shift_zc and zc > best_zc:
                 best_zc, n = zc, k
         if not n:
             return None
     kind = "spike" if n == 1 else "shift"
     zc = best_zc
+    if learning and not force_days and zc < LEARNING_Z + strict:
+        return None  # first weeks: only very big changes
     aff = window[-n:]
     value = sum(p.value for p in aff) / n
     usual = sum(expect[-n:]) / n
@@ -273,9 +302,11 @@ def sudden(spec: catalog.MetricSpec, pts: list[Point], split: str = "",
     if not force_days and (abs(rel) < spec.min_rel or abs(value - usual) < spec.min_abs):
         return None  # real, but too small to be worth your time
     provisional = all(p.status == PROJECTED for p in aff)
-    conf = "high" if zc >= 5.5 else "medium" if zc >= 4 else "low"
+    conf = "high" if zc >= 5.5 + strict else "medium" if zc >= 4 + strict else "low"
     if learning:
-        conf = "low"
+        # With a public-data guess for this game's size, a very clear change can
+        # be trusted a little even in the first weeks. Without one, it can't.
+        conf = "medium" if informed and zc >= 5 + strict else "low"
     elif provisional and n == 1 and zc < 7:  # one estimated day alone: be careful
         conf = {"high": "medium", "medium": "low", "low": "low"}[conf]
     good = (rel > 0) == spec.higher_is_better
@@ -325,9 +356,10 @@ def trend(spec: catalog.MetricSpec, pts: list[Point], split: str = "") -> Signal
                   weeks, good, False, "high" if abs(t) >= 5 else "medium")
 
 
-def budget(spec: catalog.MetricSpec, pts: list[Point], split: str = "") -> Signal | None:
-    """Past a rule-of-thumb limit on most of the last 7 days."""
-    rule = next(((k, lim) for m, k, lim in BUDGETS if m == spec.name), None)
+def budget(spec: catalog.MetricSpec, pts: list[Point], split: str = "",
+           limits: tuple | None = None) -> Signal | None:
+    """Past a rule-of-thumb limit (or one you set yourself) on most of the last 7 days."""
+    rule = next(((k, lim) for m, k, lim in (limits or BUDGETS) if m == spec.name), None)
     if not rule or len(pts) < 7:
         return None
     kind, limit = rule

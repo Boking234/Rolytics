@@ -38,6 +38,7 @@ class MetricSpec:
     min_rel: float = 0.10         # smallest change worth mentioning, as a share of normal
     min_abs: float = 0.0          # ...and in the metric's own units (rates: share, e.g. 0.002)
     percent_above: float = 1.0    # rates: a typical value above this means Roblox sent percents
+    context: bool = False         # pulled to explain other findings, not checked on its own
 
 
 DEFAULT_METRICS: tuple[MetricSpec, ...] = (
@@ -58,6 +59,21 @@ DEFAULT_METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("ForwardD7Retention", STANDARD, "Day 7 retention", "%",
                ((),), "Analytics > Retention",
                family="retention", weight=2.5, rate=True, min_rel=0.10, min_abs=0.003),
+    MetricSpec("ForwardD30Retention", STANDARD, "Day 30 retention", "%",
+               ((),), "Analytics > Retention",
+               family="retention", weight=2.0, rate=True, min_rel=0.12, min_abs=0.002, percent_above=0.6,
+               context=True),  # few players behind it each day: too jumpy to alarm on, useful as a clue
+    # --- Longevity and discovery (used to explain why player numbers move) ---
+    MetricSpec("MonthlyActiveUsers", STANDARD, "Monthly active users", "players",
+               ((),), "Analytics > Engagement", family="players", context=True),
+    MetricSpec("DauMauStickiness", STANDARD, "Stickiness (daily / monthly players)", "%",
+               ((),), "Analytics > Retention", family="engagement", rate=True, context=True),
+    MetricSpec("UniqueUsersWithImpressions", STANDARD, "People who saw the game", "people",
+               ((),), "Analytics > Acquisition",
+               family="discovery", weight=1.5, min_rel=0.20, min_abs=50),
+    MetricSpec("EndToEndCVR", STANDARD, "Saw-it-to-played-it rate", "%",
+               ((),), "Analytics > Acquisition",
+               family="discovery", weight=1.5, rate=True, min_rel=0.15, min_abs=0.001, percent_above=0.5),
     # --- Monetization ---
     MetricSpec("DailyRevenue", STANDARD, "Daily revenue", "Robux",
                ((),), "Analytics > Monetization",
@@ -102,5 +118,5 @@ def get(name: str) -> MetricSpec:
 # Families, in the order the weekly scorecard lists them.
 FAMILIES = {
     "stability": "Stability", "performance": "Performance", "players": "Players",
-    "engagement": "Engagement", "retention": "Retention", "money": "Monetization",
+    "engagement": "Engagement", "retention": "Retention", "money": "Monetization", "discovery": "Discovery",
 }

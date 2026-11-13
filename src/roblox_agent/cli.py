@@ -18,7 +18,21 @@ import webbrowser
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import __version__, catalog, changes, checkup, config, connect, db, ingest, report, selftest, weekly
+from . import (
+    __version__,
+    catalog,
+    changes,
+    checks,
+    checkup,
+    config,
+    connect,
+    db,
+    ingest,
+    report,
+    selftest,
+    weekly,
+    why,
+)
 from .api import AnalyticsClient, ApiError, AuthError
 from .demo import FakeRoblox
 
@@ -279,9 +293,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
                              sleep=lambda _s: None)
     _say("Practice mode: made-up numbers, no internet, no key.")
     ingest.pull(client, conn, backfill_days=120)
-    shipped = ingest.today_utc() - timedelta(days=9)
-    changes.log(conn, DEMO_UNIVERSE, "Shorter tutorial (example)",
-                dict(zip(changes.FACTOR_KEYS, (2, 1, 1, 0, 0, 1, 1))), shipped, "ForwardD1Retention")
+    shipped = ingest.today_utc() - timedelta(days=37)
+    changes.log(conn, DEMO_UNIVERSE, "New icon and thumbnail (example)",
+                dict(zip(changes.FACTOR_KEYS, (3, 1, 0, 0, 0, 0, 1))), shipped, "DailyActiveUsers")
     _print_checkup(conn, DEMO_UNIVERSE, weekly_too=True)
     _write_view(conn, DEMO_UNIVERSE, config.home_dir() / "demo-report.html", not args.no_open)
     return 0
@@ -330,6 +344,42 @@ def cmd_week(args: argparse.Namespace) -> int:
         _say("No data yet. Run:  roblox-agent")
         return 1
     _say(weekly.build(conn, uid, date.fromisoformat(latest)).text())
+    return 0
+
+
+def cmd_why(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    _say(why.report(conn, uid))
+    return 0
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    if args.what == "sensitivity":
+        if args.value not in checks.SENSITIVITY:
+            _say("Use: roblox-agent tune sensitivity low|normal|high")
+            return 1
+        db.set_setting(conn, "sensitivity", args.value)
+    elif args.what == "limit":
+        # roblox-agent tune limit ClientFpsP10 min 25   (or: ... off)
+        own = db.get_setting(conn, "limits", {}) or {}
+        parts = [args.value, *args.more]
+        if len(parts) == 2 and parts[1] == "off":
+            own[parts[0]] = None
+        elif len(parts) == 3 and parts[1] in ("min", "max"):
+            own[parts[0]] = [parts[1], float(parts[2])]
+        else:
+            _say("Use: roblox-agent tune limit ClientFpsP10 min 25   (or: tune limit ClientFpsP10 off)")
+            return 1
+        db.set_setting(conn, "limits", own)
+    elif args.what in ("off", "on"):
+        if args.value not in checks.REGISTRY:
+            _say("Checks: " + ", ".join(checks.REGISTRY))
+            return 1
+        off = set(db.get_setting(conn, "checks_off", []) or [])
+        (off.add if args.what == "off" else off.discard)(args.value)
+        db.set_setting(conn, "checks_off", sorted(off))
+    _say(checks.describe(conn, uid))
     return 0
 
 
@@ -411,6 +461,15 @@ def build_parser() -> argparse.ArgumentParser:
     wp = sub.add_parser("week", help="(advanced) show the weekly check-up now")
     wp.add_argument("--demo", action="store_true")
     wp.set_defaults(func=cmd_week)
+    yp = sub.add_parser("why", help="why player numbers are rising or falling")
+    yp.add_argument("--demo", action="store_true", help="use the practice data")
+    yp.set_defaults(func=cmd_why)
+    tp = sub.add_parser("tune", help="(advanced) show or change how sensitive the checks are")
+    tp.add_argument("what", nargs="?", choices=["sensitivity", "limit", "off", "on"])
+    tp.add_argument("value", nargs="?")
+    tp.add_argument("more", nargs="*")
+    tp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
+    tp.set_defaults(func=cmd_tune)
     stp = sub.add_parser("selftest", help="(advanced) prove the checks find planted problems")
     stp.add_argument("--seeds", type=int, default=3, help=argparse.SUPPRESS)
     stp.add_argument("--calm", type=int, default=30, help=argparse.SUPPRESS)

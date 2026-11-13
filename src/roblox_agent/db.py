@@ -10,6 +10,7 @@ settings       small key/value store (schema version etc.)
 findings       what the check-ups found over time, and what you said about it
 checkups       one row per data day: the status and the top 3 that were shown
 changes        game changes you shipped, scored with the change-weight rubric
+feedback       every "fixed" / "false alarm" verdict you gave, so the checks can adapt
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -119,6 +120,16 @@ CREATE TABLE IF NOT EXISTS changes (
     announced    INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    universe_id INTEGER NOT NULL,
+    metric      TEXT NOT NULL,
+    split       TEXT NOT NULL,
+    action      TEXT NOT NULL,        -- done | wrong
+    day         TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
 """
 
 
@@ -137,6 +148,22 @@ def connect(path: Path | str) -> sqlite3.Connection:
                  (str(SCHEMA_VERSION),))
     conn.commit()
     return conn
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
+    """Read a small JSON setting (sensitivity, your own limits...)."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value"])
+    except ValueError:
+        return default
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+    conn.commit()
 
 
 def breakdown_key(breakdowns: Iterable[dict[str, Any]]) -> str:

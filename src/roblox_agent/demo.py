@@ -20,7 +20,23 @@ BASES = {
     "PayingUsersCVR": 0.018, "ClientCrashRate15m": 0.012, "ClientFpsP10": 31.0,
     "ClientMemoryUsageP90": 1450.0, "OomUnexpectedExits": 9, "PeakConcurrentPlayers": 140,
     "ServerFrameRateAvg": 58.5, "ServerCrashCount": 1,
+    "ForwardD30Retention": 0.022, "MonthlyActiveUsers": 7800, "DauMauStickiness": 0.154,
+    "UniqueUsersWithImpressions": 21000, "EndToEndCVR": 0.02,
 }
+# Demo story: over the last 5 weeks the game is shown to fewer people, so fewer
+# new players arrive and daily players slowly follow.
+FADE_DAYS = 35
+FADE_NEW = 0.62          # new players at the end, vs before
+FOLLOWS_PLAYERS = ("DailyActiveUsers", "Visits", "PeakConcurrentPlayers", "DailyRevenue", "OomUnexpectedExits")
+
+
+def _fade(age: int) -> tuple[float, float]:
+    """(new players, all players) as a share of normal, ``age`` days before the latest day."""
+    level, new = 1.0, 1.0
+    for a in range(FADE_DAYS, age - 1, -1):
+        new = 1 - (1 - FADE_NEW) * (1 - a / FADE_DAYS)
+        level = 0.35 * new + 0.65 * level
+    return new, level
 SPLITS = {"Platform": {"Computer": 0.45, "Phone": 0.4, "Tablet": 0.1, "Console": 0.05},
           "IsNewUser": {"true": 0.35, "false": 0.65}}
 
@@ -33,7 +49,7 @@ def _noise(*parts: Any) -> float:
 def _value(metric: str, day: datetime, split: str | None) -> float:
     base = BASES.get(metric, 100)
     weekend = 1.15 if day.weekday() >= 5 else 1.0
-    trend = 1 + 0.1 * math.sin(day.toordinal() / 20)
+    trend = 1 + 0.03 * math.sin(day.toordinal() / 20)
     v = base * weekend * trend * (1 + 0.2 * _noise(metric, day.date(), split))
     if split is not None and base > 50 and metric not in ("ClientFpsP10", "ServerFrameRateAvg"):
         dim, val = split.split("=")
@@ -99,6 +115,16 @@ class FakeRoblox:
             for i in range(days):
                 day = start + timedelta(days=i)
                 value = _value(metric, day, split)
+                if self.incident and days - 1 - i <= FADE_DAYS:
+                    new, level = _fade(days - 1 - i)
+                    if metric == "UniqueUsersWithImpressions" or split == "IsNewUser=true":
+                        value = round(value * new, 4)
+                    elif split == "IsNewUser=false":
+                        value = round(value * (level - 0.35 * new) / 0.65, 4)
+                    elif metric in FOLLOWS_PLAYERS:
+                        value = round(value * level, 4)
+                    elif metric == "MonthlyActiveUsers":
+                        value = round(value * (1 + level) / 2, 4)
                 if (self.incident and i == days - 1 and metric == "ClientCrashRate15m"
                         and split in (None, "Platform=Phone")):
                     value = round(value * (3.0 if split else 1.8), 4)

@@ -33,11 +33,12 @@ All analysis runs locally in Python. The AI agent receives only:
 
 | What | Size |
 |---|---|
-| Tool list (5 tools, sent once per session) | ~1,700 characters, about 400 tokens |
+| Tool list (6 tools, sent once per session) | ~1,850 characters, about 460 tokens |
 | Daily check-up text | ~300 to 1,400 characters, about 100 to 350 tokens |
-| Weekly check-up (first check-up of a week only) | adds ~400 to 1,000 characters, about 100 to 250 tokens |
+| "Why are players leaving" (`player_trend`, only when asked) | up to ~1,200 characters, about 300 tokens |
+| Weekly check-up (first check-up of a week only) | adds ~400 to 1,300 characters, about 100 to 330 tokens (includes the lifecycle line) |
 | Built-in prompt | ~300 characters |
-| **Total for one check-up** | **about 600 to 850 tokens (up to ~1,100 on the weekly day)** |
+| **Total for one check-up** | **about 650 to 900 tokens (up to ~1,200 on the weekly day)** |
 
 A 1 MB file is about 250,000 tokens, so a check-up costs about 0.3% of that. Automated tests fail if
 the daily check-up passes 1,500 characters in any test scenario, the weekly day passes 2,600, or

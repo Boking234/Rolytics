@@ -16,7 +16,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from . import catalog, changes, detect
+from . import catalog, changes, decline, detect
 from .checkup import _day, _where, fmt_change
 
 # One headline metric per area, in scorecard order.
@@ -51,6 +51,7 @@ class Weekly:
     false_alarms: int = 0
     change_lines: list[str] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
+    lifecycle: str = ""
 
     def text(self) -> str:
         out = [f"Weekly check-up, week to {_day(self.week_end)}:"]
@@ -62,6 +63,8 @@ class Weekly:
                 parts.append(f"{len(items)} {label} ({', '.join(items[:3])})")
         out.append("Issues: " + ("; ".join(parts) if parts else "none this week") + "."
                    + (f" {self.false_alarms} marked false alarm." if self.false_alarms else ""))
+        if self.lifecycle:
+            out.append(self.lifecycle)
         if self.change_lines:
             out.append("Changes: " + " ".join(self.change_lines))
         if self.next_steps:
@@ -132,12 +135,22 @@ def build(conn: sqlite3.Connection, uid: int, latest: date) -> Weekly:
             w.change_lines.append(f"{head} waiting, judge on {_day(judge_on)}.")
 
     open_rows.sort(key=lambda r: -catalog.get(r["metric"]).weight * min(abs(r["peak_rel"] or 0), 2))
-    w.next_steps = [f"Fix: {_name(r)}." for r in open_rows[:3]]
+    seen: set[str] = set()
+    for r in open_rows:  # one step per story: "players" and "visits" down is one thing to fix
+        fam = catalog.get(r["metric"]).family
+        if fam not in seen and len(w.next_steps) < 3:
+            seen.add(fam)
+            w.next_steps.append(f"Fix: {_name(r)}.")
     if len(w.next_steps) < 3:
         for c in changes.recent(conn, uid, week_start):
             if not c["outcome"] and len(w.next_steps) < 3:
                 judge_on = date.fromisoformat(c["judge_on"])
                 w.next_steps.append(f"Judge change #{c['id']} on {_day(judge_on)}.")
+    life = decline.lifecycle(conn, uid)
+    if life:
+        w.lifecycle = life.text()
+        if life.stage in ("declining", "fading") and len(w.next_steps) < 3:
+            w.next_steps.append("Find out why players are leaving (roblox-agent why).")
     worse = [a for a in w.areas if a.verdict == "worse"]
     for a in worse:
         if len(w.next_steps) >= 3:

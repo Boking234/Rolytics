@@ -53,6 +53,30 @@ class Game:
     events: list[Event] = field(default_factory=list)
     percent_units: bool = False  # Roblox sending 21 instead of 0.21 (not yet verified which)
     outlier_day: int | None = None  # one glitch day in the past (days before end)
+    days: int = 120            # how much history the game has
+
+
+NEW_SHARE = 0.35   # new players as a share of daily players in a steady game
+COME_BACK = 0.65   # share of yesterday's players who return today (new + returning = today)
+
+
+def _population(game: Game, days: int) -> tuple[list[float], list[float]]:
+    """Player level and new-player share per day from the two things that drive them.
+
+    Events on "NewPlayers" (how many arrive) and "ComeBack" (how many return)
+    change players the way they do in a real game: gradually, through
+        players today = new today + come-back rate x players yesterday.
+    """
+    if not any(e.metric in ("NewPlayers", "ComeBack") for e in game.events):
+        return [1.0] * days, [NEW_SHARE] * days
+    level, mult, share = 1.0, [], []
+    for n in range(days):
+        i = days - 1 - n
+        new = NEW_SHARE * _factor(game, "NewPlayers", None, i)
+        level = new + COME_BACK * _factor(game, "ComeBack", None, i) * level
+        mult.append(level)
+        share.append(new / level)
+    return mult, share
 
 
 def _factor(game: Game, metric: str, platform: str | None, i_from_end: int) -> float:
@@ -71,9 +95,13 @@ def _factor(game: Game, metric: str, platform: str | None, i_from_end: int) -> f
     return f
 
 
-def simulate(game: Game, end: date, days: int = 120) -> dict[tuple[str, str], list[tuple[date, float, str]]]:
+def simulate(game: Game, end: date, days: int | None = None) -> dict[tuple[str, str], list[tuple[date, float, str]]]:
     """Return {(metric, split): [(day, value, status), ...]} for a pretend game."""
+    days = days or game.days
     rnd = random.Random(game.seed)
+    rnd2 = random.Random(game.seed + 7919)  # separate dice for the longevity and discovery numbers
+    pop, new_share = _population(game, days)
+    mau_window: list[float] = []
     out: dict[tuple[str, str], list[tuple[date, float, str]]] = {}
 
     def add(metric: str, key: str, day: date, value: float, status: str) -> None:
@@ -107,14 +135,15 @@ def simulate(game: Game, end: date, days: int = 120) -> dict[tuple[str, str], li
 
         dau_p: dict[str, float] = {}
         for plat, share in PLATFORMS.items():
-            v = game.dau * share * wf * math.exp(level) * _factor(game, "DailyActiveUsers", plat, i) * glitch
+            v = (game.dau * share * wf * math.exp(level) * _factor(game, "DailyActiveUsers", plat, i) * glitch
+                 * pop[n])
             dau_p[plat] = max(0.0, noisy(v, 0.03 + 1 / math.sqrt(max(v, 1))))
         dau = sum(dau_p.values())
         nss = {p: ("NotStatisticallySignificant" if dau_p[p] < NSS_BELOW else status) for p in PLATFORMS}
         add("DailyActiveUsers", "", day, round(dau), status)
         for p in PLATFORMS:
             add("DailyActiveUsers", f"Platform={p}", day, round(dau_p[p]), nss[p])
-        new = dau * 0.35
+        new = dau * new_share[n]
         add("DailyActiveUsers", "IsNewUser=true", day, round(noisy(new, 0.03)), status)
         add("DailyActiveUsers", "IsNewUser=false", day, round(noisy(dau - new, 0.03)), status)
         add("Visits", "", day, round(noisy(dau * 2.4, 0.04) * _factor(game, "Visits", None, i)), status)
@@ -158,14 +187,28 @@ def simulate(game: Game, end: date, days: int = 120) -> dict[tuple[str, str], li
         add("ServerCrashCount", "", day,
             poisson(max(dau / 1000, 0.2) * 0.8 * _factor(game, "ServerCrashCount", None, i)), status)
 
+        # Longevity and discovery numbers (their own dice, so older scenarios are unchanged).
+        mau_window.append(dau)
+        mau = sum(mau_window[-30:]) / len(mau_window[-30:]) * 6.5
+        add("MonthlyActiveUsers", "", day, round(mau), status)
+        add("DauMauStickiness", "", day, dau / mau, status)
+        seen = new / 0.02 * math.exp(rnd2.gauss(0, 0.05))
+        add("UniqueUsersWithImpressions", "", day, round(seen), status)
+        add("EndToEndCVR", "", day, max(0.0, rnd2.gauss(0.02, math.sqrt(0.02 * 0.98 / max(seen, 1)))), status)
+        if i >= 30:
+            p30 = 0.022 * _factor(game, "ForwardD30Retention", None, i)
+            sd = math.sqrt(p30 * (1 - p30) / max(new, 1))
+            add("ForwardD30Retention", "", day, max(0.0, rnd2.gauss(p30, sd)), status)
+
     if game.percent_units:
         for (metric, key), rows in out.items():
-            if metric in ("ForwardD1Retention", "ForwardD7Retention", "PayingUsersCVR", "ClientCrashRate15m"):
+            if metric in ("ForwardD1Retention", "ForwardD7Retention", "ForwardD30Retention", "PayingUsersCVR",
+                          "ClientCrashRate15m", "EndToEndCVR", "DauMauStickiness"):
                 out[(metric, key)] = [(d, v * 100, s) for d, v, s in rows]
     return out
 
 
-def load(conn: sqlite3.Connection, universe_id: int, game: Game, end: date, days: int = 120) -> None:
+def load(conn: sqlite3.Connection, universe_id: int, game: Game, end: date, days: int | None = None) -> None:
     """Write a pretend game into the database, as if it had been pulled."""
     run = db.start_run(conn, universe_id)
     now = db.utcnow()
@@ -189,6 +232,7 @@ class Scenario:
     expect: list[tuple[str, str | None, bool]] = field(default_factory=list)  # (metric, platform, is_issue)
     status: tuple[str, ...] = ()      # acceptable statuses
     game: dict = field(default_factory=dict)
+    cause: str = ""                   # expected answer to "why are fewer people playing": new | return
 
 
 SCENARIOS: list[Scenario] = [
@@ -221,7 +265,20 @@ SCENARIOS: list[Scenario] = [
              ("All good",)),
     Scenario("viral_spike", "Good news: players up 70% (a video went viral)",
              [Event("DailyActiveUsers", 1.7, 2)], [("DailyActiveUsers", None, False)], ("All good",)),
+    Scenario("drop_that_stayed", "Players fell 20% three weeks ago and never came back",
+             [Event("DailyActiveUsers", 0.8, 20)], [("DailyActiveUsers", None, True)], ("Watch", "Act now")),
+    Scenario("fewer_new_players", "New players dry up over 5 weeks (the game is shown to fewer people)",
+             [Event("NewPlayers", 0.65, 0, ramp_weeks=5)], [("DailyActiveUsers", None, True)],
+             ("Watch", "Act now"), cause="new"),
+    Scenario("coming_back_less", "Since 4 weeks ago players return less often (stale content)",
+             [Event("ComeBack", 0.9, 28), Event("ForwardD7Retention", 0.85, 28)],
+             [("DailyActiveUsers", None, True)], ("Watch", "Act now"), cause="return"),
+    Scenario("young_game_crashes", "Game with only 16 days of history: crashes triple on phones",
+             [Event("ClientCrashRate15m", 3.0, 1, "Phone")], [("ClientCrashRate15m", "Phone", True)],
+             ("Act now", "Watch"), {"days": 16}),
     # ----- traps: nothing is wrong, the check-up should stay calm -----
+    Scenario("young_game_calm", "Nothing wrong; game with only 16 days of history", [], [], ("All good",),
+             {"days": 16, "dau": 400}),
     Scenario("calm", "Nothing happened", [], [], ("All good",)),
     Scenario("strong_weekends", "Nothing wrong, just very strong weekends", [], [], ("All good",),
              {"weekend": 2.2}),
@@ -276,6 +333,15 @@ def run_scenario(sc: Scenario, seed: int, end: date, checker: Callable | None = 
         if not any(_matches(f, metric, platform, is_issue) for f in top):
             ok = False
             why.append(f"missed {metric}{' on ' + platform if platform else ''}")
+    if sc.cause:
+        from . import why as why_mod
+        w = why_mod.explain(conn, 1)
+        got = w.cause if w else "nothing"
+        if got != sc.cause:
+            ok = False
+            why_text = {"new": "fewer new players", "return": "players coming back less"}
+            want = why_text[sc.cause]
+            why.append(f"wrong reason: said {why_text.get(got, got)}, wanted {want}")
     if not sc.expect:
         wrong = [f for f in top if not f.good]
         if wrong:

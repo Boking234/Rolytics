@@ -17,7 +17,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, BinaryIO
 
-from . import __version__, catalog, changes, checkup, config, db, ingest
+from . import __version__, catalog, changes, checkup, config, db, ingest, why
 from .api import AnalyticsClient, ApiError
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -55,6 +55,11 @@ TOOLS = [
             "required": ["title"]},
     },
     {
+        "name": "player_trend",
+        "description": "Why player numbers rise or fall: new vs returning players, clues, device, lifecycle.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "metric_history",
         "description": "Daily values of one metric, max 90 days, as 'date value' lines.",
         "inputSchema": {"type": "object", "properties": {
@@ -76,7 +81,8 @@ PROMPTS = [{
 }]
 PROMPT_TEXT = ("Call the daily_checkup tool once. Explain the result to a game developer in plain language, "
                "under 120 words: what changed, the likely cause to check first, and one next step for each "
-               "ISSUE. If I say an item is fixed, wrong or should wait, use mark_item. "
+               "ISSUE. If I say an item is fixed, wrong or should wait, use mark_item. If players are falling and "
+               "I ask why, use player_trend. "
                "Don't call other tools unless I ask.")
 
 
@@ -123,6 +129,9 @@ class Server:
             return changes.log(self.conn, self.universe_id, title, scores, day, target)
         except (ValueError, TypeError) as e:
             return f"Not logged: {e}"
+
+    def player_trend(self) -> str:
+        return why.report(self.conn, self.universe_id)
 
     def metric_history(self, metric: str, days: int = 14, split: str = "") -> str:
         days = max(1, min(int(days or 14), MAX_HISTORY_DAYS))
@@ -198,7 +207,7 @@ class Server:
             args = params.get("arguments") or {}
             fn = {"daily_checkup": self.daily_checkup, "metric_history": self.metric_history,
                   "list_metrics": self.list_metrics, "mark_item": self.mark_item,
-                  "log_change": self.log_change}.get(name)
+                  "log_change": self.log_change, "player_trend": self.player_trend}.get(name)
             if not fn:
                 raise _RpcError(-32602, f"Unknown tool: {name}")
             try:

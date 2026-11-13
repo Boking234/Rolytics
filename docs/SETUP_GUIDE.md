@@ -92,7 +92,8 @@ Tell it what you did about an item (the number is the item's place in today's li
 | --- | --- |
 | `roblox-agent mark 1 done` | You fixed it. Hidden for 3 days, then it comes back only if it's still happening. |
 | `roblox-agent mark 1 snooze` | Not now. Hidden for 7 days. |
-| `roblox-agent mark 1 wrong` | False alarm. Hidden for 30 days, and noted. |
+| `roblox-agent mark 1 wrong` | False alarm. Hidden for 30 days, and that number needs stronger evidence from now on. |
+| `roblox-agent why` | Why player numbers are rising or falling: fewer new players or players coming back less, with clues. |
 | `roblox-agent change "Shorter tutorial"` | You shipped a change. 7 quick questions score how heavy it is; it gets judged after 3 to 21 days. |
 
 How the checks decide what to show: [HOW_CHECKS_WORK.md](HOW_CHECKS_WORK.md).
@@ -119,6 +120,7 @@ agent, then ask it: **"Run my Roblox daily check-up."**
 | `roblox-agent view` | The check-up as a page, with every chart under "All metrics" |
 | `roblox-agent demo` | The same with made-up numbers, including a pretend crash spike |
 | `roblox-agent week` | The weekly check-up, any day |
+| `roblox-agent tune` | Shows how the checks are tuned. `tune sensitivity low` gives fewer, surer items; `high` gives earlier warnings. `tune limit ClientFpsP10 min 25` sets your own limit. |
 | `roblox-agent selftest` | Plants known problems in pretend games and shows the checks find them |
 | `roblox-agent show` | A table of every metric |
 | `roblox-agent export` | A CSV file for Excel or Google Sheets |
