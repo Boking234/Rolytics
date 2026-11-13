@@ -1,0 +1,57 @@
+name: windows-app
+
+# Builds the Windows download: a zip with the app and its command-line helper.
+# Runs on every version tag (v0.4.0, ...) and attaches the zip to that GitHub Release.
+# Can also be started by hand from the Actions tab (then the zip is kept as a build artifact).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # to attach the zip to the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install ".[app]" pyinstaller pytest
+      - name: Tests
+        run: python -m pytest -q
+      - name: App icon
+        run: python packaging/make_icon.py
+      - name: Build the app (no console window)
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name RobloxAnalyticsAgent
+          --icon packaging/app.ico --collect-data roblox_agent packaging/app_entry.py
+      - name: Build the command-line helper (used by AI agents)
+        run: >
+          pyinstaller --noconfirm --onefile --console --name roblox-agent
+          --icon packaging/app.ico --collect-data roblox_agent packaging/cli_entry.py
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          dist\roblox-agent.exe --version
+          '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' | dist\roblox-agent.exe mcp | Select-String '"result"'
+      - name: Zip
+        shell: pwsh
+        run: |
+          Copy-Item packaging\READ_ME_FIRST.txt dist\
+          Compress-Archive -Path dist\RobloxAnalyticsAgent.exe, dist\roblox-agent.exe, dist\READ_ME_FIRST.txt -DestinationPath RobloxAnalyticsAgent-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RobloxAnalyticsAgent-windows
+          path: RobloxAnalyticsAgent-windows.zip
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release view $env:GITHUB_REF_NAME 2>$null; if ($LASTEXITCODE -ne 0) { gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --notes "Windows app: download the zip, unzip it, double-click RobloxAnalyticsAgent.exe." }
+          gh release upload $env:GITHUB_REF_NAME RobloxAnalyticsAgent-windows.zip --clobber

@@ -19,7 +19,20 @@ from pathlib import Path
 NAME = "roblox-agent"
 
 
+CLI_EXE = "roblox-agent.exe"  # the console program shipped next to the desktop app
+
+
 def server_command() -> tuple[str, list[str]]:
+    """How an agent should start our MCP server.
+
+    From a pip install: ``<python> -m roblox_agent mcp``. From the packaged Windows app,
+    ``sys.executable`` is the app itself, which has no console, so we point agents at the
+    console program shipped next to it (``roblox-agent.exe mcp``).
+    """
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable)
+        cli = exe.with_name(CLI_EXE)
+        return str(cli if cli.exists() else exe), ["mcp"]
     return sys.executable, ["-m", "roblox_agent", "mcp"]
 
 
@@ -58,6 +71,32 @@ def json_config_path(agent: Agent) -> Path:
     if agent.key == "windsurf":
         return home / ".codeium" / "windsurf" / "mcp_config.json"
     raise ValueError(agent.key)
+
+
+def _store_claude_paths() -> list[Path]:
+    """Claude Desktop installed from the Microsoft Store keeps its settings in a private copy of AppData."""
+    if sys.platform != "win32":
+        return []
+    pkgs = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Packages"
+    try:
+        dirs = sorted(pkgs.glob("Claude_*"))
+    except OSError:
+        return []
+    return [d / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json" for d in dirs]
+
+
+def detect(which=shutil.which) -> dict[str, bool]:
+    """Which agents look installed on this computer (best guess, used to sort the list)."""
+    found: dict[str, bool] = {}
+    for a in AGENTS:
+        if a.kind == "cli":
+            found[a.key] = bool(which(a.cli))
+        elif a.kind == "json":
+            path = json_config_path(a)
+            found[a.key] = path.parent.exists() or (a.key == "claude-desktop" and bool(_store_claude_paths()))
+        else:
+            found[a.key] = False
+    return found
 
 
 def cli_add_command(agent: Agent) -> list[str]:
@@ -107,6 +146,10 @@ def connect(agent: Agent, run=subprocess.run, which=shutil.which) -> tuple[bool,
         try:
             extra = {"type": "stdio"} if agent.key == "cursor" else None
             backup = merge_json_config(path, agent.json_key, extra)
+            if agent.key == "claude-desktop":
+                for store_path in _store_claude_paths():
+                    if store_path != path:
+                        merge_json_config(store_path, agent.json_key, extra)
         except ValueError:
             return False, (f"{path} has a formatting error, so I didn't touch it. "
                            f"Fix it or add this by hand:\n{manual_instructions()}")

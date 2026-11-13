@@ -9,11 +9,11 @@ Researched 2026-11-13. Sources are linked. **Applied** means it's in the tool no
 | 2 | **Progressive disclosure**: the main screen shows only what matters, and details sit one click away (NN/g) | [NN/g](https://www.nngroup.com/videos/progressive-disclosure/) | **Applied:** the page shows status and top 3. All charts are folded under "All metrics". There are 4 main commands, and the rest are marked advanced. |
 | 3 | **Opinionated defaults, no settings** (Linear) | [Linear method](https://www.figma.com/blog/the-linear-method-opinionated-software/) | **Applied:** fixed metrics and thresholds, compared with the same weekday, and nothing to configure. |
 | 4 | **Fast first value** | [Userpilot TTV benchmark](https://userpilot.com/blog/time-to-value-benchmark-report-2024) | **Applied:** setup ends by showing your first real check-up. `demo` shows the result before you have a key. |
-| 5 | **Short, guided, mandatory setup** (Superhuman: completion went from about 30% to 98% once setup was mandatory) | [First Round](https://review.firstround.com/superhuman-onboarding-playbook/) | **Applied:** "Step 1 of 3" wizard (game, key, AI agent). Running with no command starts it automatically. |
+| 5 | **Short, guided, mandatory setup** (Superhuman: completion went from about 30% to 98% once setup was mandatory) | [First Round](https://review.firstround.com/superhuman-onboarding-playbook/) | **Applied:** "Step 1 of 3" wizard (game, key, AI agent) in the terminal. **0.4:** the desktop app's 6-step setup with picture guides; the key is tested with Roblox as soon as you pick your game, and only terms, key and game are required. |
 | 6 | **Helpful empty states** (NN/g) | [NN/g](https://nngroup.com/articles/empty-state-interface-design) | **Applied:** no data shows one next step. A calm day says "No unusual changes across N metrics". |
 | 7 | **Streak on a tiny daily action** (Duolingo: a 7-day streak makes completion 3.6x more likely) | [Duolingo](https://blog.duolingo.com/how-duolingo-streak-builds-habit) | **Later:** a check-up streak with free "freeze" days and no paid repairs. |
 | 8 | **Hook loop: trigger, action, reward, investment** (Nir Eyal) | [Amplitude](https://amplitude.com/blog/the-hook-model) | **Applied (0.2):** `mark 1 done / snooze / wrong` is the investment: fixed items are re-checked after 3 days, snoozed ones hide for 7, false alarms for 30. **Later:** the Discord DM as the trigger. |
-| 9 | **Few, smart notifications** (about 10% of people turn off push at 1 per week, and about 40% at 3 to 6) | [Business of Apps](https://www.businessofapps.com/marketplace/push-notifications/research/push-notifications-statistics/) | **Later:** at most one DM a day, sent only when there's news, and it backs off if ignored. |
+| 9 | **Few, smart notifications** (about 10% of people turn off push at 1 per week, and about 40% at 3 to 6) | [Business of Apps](https://www.businessofapps.com/marketplace/push-notifications/research/push-notifications-statistics/) | **Applied (0.4):** the desktop app sends at most one notification a day (the daily report), and holds it during your quiet hours. **Later:** the same as a Discord DM. |
 | 10 | **Celebrate real outcomes, not taps** (Robinhood removed confetti after regulators objected) | [CNBC](https://www.cnbc.com/2021/03/31/robinhood-gets-rid-of-confetti-feature-amid-scrutiny-over-gamification.html) | **Applied:** "GOOD" items are real metric gains, such as retention up 25%. |
 | 11 | **One main action per issue** | Combines patterns 2, 3 and 5 | **Applied (basic):** the agent's prompt asks for one next step per issue. **Later:** a "Send to my agent" button. |
 
@@ -45,3 +45,11 @@ the daily check-up passes 1,500 characters in any test scenario, the weekly day 
 the tool list passes 3,000. The tool list grew in 0.2 (two new tools: mark an item, log a change).
 Your agent's own built-in instructions cost extra, and that part depends on the agent, not on
 this tool.
+
+## Desktop app (0.4)
+
+- **Same status, same top 3** as the terminal, with one button row per issue (Fixed, Snooze 7 days, Not a problem). Details are folded.
+- **Three tabs only:** Today, Inbox, Settings. All charts open in your browser, one click away.
+- **Consent screens are honest:** sharing is a separate switch, off by default, with "would be shared" and "never shared" lists side by side. Under 13 it can't be switched on, and Discord is blocked. 13 to 17 needs a parent or guardian box ticked.
+- **Discord is "Highly recommended" but skippable,** and the button says plainly that it's coming in the next update. Ticking "Remind me" is the only thing it records.
+- **Pause is one click** in Settings and in the tray menu.

@@ -4,6 +4,7 @@ Most people only ever need:
     roblox-agent            today's check-up (sets things up the first time)
     roblox-agent view       the same, as a page with charts
     roblox-agent connect    pick the AI agent to use (Claude, Codex, ...)
+    roblox-agent app        the desktop app (setup screens, inbox, settings)
     roblox-agent mark 1 done        tell it item 1 is fixed (or: snooze, wrong)
     roblox-agent change "name"      log a game change so it gets judged later
 """
@@ -301,6 +302,11 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_app(args: argparse.Namespace) -> int:
+    from .app import main as app_main
+    return app_main.run(demo=args.demo, browser=args.browser, background=args.background, port=args.port)
+
+
 def cmd_mark(args: argparse.Namespace) -> int:
     conn, uid = _open_db(args.demo)
     msg = checkup.mark(conn, uid, args.item, args.action)
@@ -441,6 +447,12 @@ def build_parser() -> argparse.ArgumentParser:
                                       "economy,paid,progress,undo)")
     chp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
     chp.set_defaults(func=cmd_change)
+    ap = sub.add_parser("app", help="open the desktop app (setup, today's check-up, inbox, settings)")
+    ap.add_argument("--demo", action="store_true", help="practice mode with made-up numbers")
+    ap.add_argument("--browser", action="store_true", help="open in your browser instead of a window")
+    ap.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
+    ap.set_defaults(func=cmd_app)
     dp = sub.add_parser("demo", help="try it with made-up numbers (no key needed)")
     dp.add_argument("--no-open", action="store_true")
     dp.set_defaults(func=cmd_demo)

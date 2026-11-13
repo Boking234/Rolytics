@@ -11,6 +11,7 @@ findings       what the check-ups found over time, and what you said about it
 checkups       one row per data day: the status and the top 3 that were shown
 changes        game changes you shipped, scored with the change-weight rubric
 feedback       every "fixed" / "false alarm" verdict you gave, so the checks can adapt
+inbox          reports and alerts the desktop app showed you (its in-app inbox)
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -128,6 +129,18 @@ CREATE TABLE IF NOT EXISTS feedback (
     split       TEXT NOT NULL,
     action      TEXT NOT NULL,        -- done | wrong
     day         TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inbox (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    universe_id INTEGER NOT NULL,
+    kind        TEXT NOT NULL,        -- daily | alert | note
+    status      TEXT,                 -- All good | Watch | Act now (daily reports)
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    data_day    TEXT,
+    read        INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
 """

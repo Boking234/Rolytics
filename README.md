@@ -24,6 +24,27 @@ Cursor, VS Code, Gemini CLI, Windsurf) via a built-in MCP server.
 
 **Not a coder? Follow the [setup guide](docs/SETUP_GUIDE.md).**
 
+## Desktop app (new in 0.4)
+
+One app does everything: on first launch it walks you through the
+[terms](src/roblox_agent/app/web/TERMS.md) and [privacy policy](src/roblox_agent/app/web/PRIVACY.md)
+(with an age check), the optional cloud-sharing choice (off by default), your Roblox API key
+(with a picture guide), picking your game, picking your AI agent, and Discord messages (coming
+next). After that it shows today's status and top 3 with **Fixed / Snooze / Not a problem**
+buttons, keeps an **inbox** of every report, sends a desktop notification when a new report
+arrives (held during your quiet hours), and runs the daily report on its own at the time you pick.
+
+- **Windows:** download `RobloxAnalyticsAgent-windows.zip` from
+  [Releases](https://github.com/Boking234/roblox-analytics-agent/releases), unzip, double-click
+  `RobloxAnalyticsAgent.exe`. No Python needed.
+- **From Python:** `pip install "roblox-analytics-agent[app] @ https://github.com/Boking234/roblox-analytics-agent/archive/refs/heads/main.zip"`,
+  then `roblox-agent app`. Without the `[app]` extras it opens in your browser instead of its own window.
+- **Try it first:** `roblox-agent app --demo` (made-up numbers, a separate folder, any key text works).
+
+The app is a page served only to your own computer (127.0.0.1) and protected by a random token
+made at each launch. The key is never shown again, never sent to the page after you paste it,
+and never given to the AI agent.
+
 ## Quick start
 
 ```bash
@@ -35,6 +56,7 @@ roblox-agent connect   # pick your AI agent (claude-code, claude-desktop, codex,
 roblox-agent mark 1 done          # item 1 is fixed (or: snooze = hide 7 days, wrong = false alarm)
 roblox-agent change "Shorter tutorial"   # log a change; 7 quick questions score how heavy it is
 roblox-agent why       # why player numbers are rising or falling
+roblox-agent app       # the desktop app (setup screens, today, inbox, settings)
 ```
 
 Advanced: `tune` (sensitivity, your own limits, switch checks off), `week`, `selftest`, `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.

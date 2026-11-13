@@ -1,5 +1,19 @@
 # Setup guide (no coding needed)
 
+## Easiest: the Windows app (no Python)
+
+1. Download `RobloxAnalyticsAgent-windows.zip` from the
+   [Releases page](https://github.com/Boking234/roblox-analytics-agent/releases).
+2. Unzip it somewhere permanent (keep both .exe files together) and double-click
+   `RobloxAnalyticsAgent.exe`. If Windows says "Windows protected your PC", click
+   **More info**, then **Run anyway** (the app isn't code-signed yet).
+3. Follow the 6 setup screens: terms and age, sharing (off unless you turn it on), your Roblox
+   key (with pictures), your game, your AI agent, and Discord (coming soon, so you can skip it).
+
+That's it. The rest of this guide is for the command-line version.
+
+## Command-line version
+
 This takes about 15 minutes. You'll install Python, install the tool, make a Roblox
 API key, and see your first daily check-up. Everything stays on your computer.
 
