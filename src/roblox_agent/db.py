@@ -10,8 +10,10 @@ settings       small key/value store (schema version etc.)
 findings       what the check-ups found over time, and what you said about it
 checkups       one row per data day: the status and the top 3 that were shown
 changes        game changes you shipped, scored with the change-weight rubric
-feedback       every "fixed" / "false alarm" verdict you gave, so the checks can adapt
+feedback       every "fixed" / "snooze" / "false alarm" click, so the checks can adapt
 inbox          reports and alerts the desktop app showed you (its in-app inbox)
+change_effects how each judged change moved each number (to learn which changes help or hurt)
+fix_tries      fixes you marked done, and whether the numbers really recovered afterwards
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS findings (
     peak_rel      REAL,
     last_line     TEXT,
     updated_at    TEXT NOT NULL,
+    fix           TEXT,               -- id of the fix suggested for it (see fixes.py)
     PRIMARY KEY (universe_id, key)
 );
 
@@ -127,9 +130,10 @@ CREATE TABLE IF NOT EXISTS feedback (
     universe_id INTEGER NOT NULL,
     metric      TEXT NOT NULL,
     split       TEXT NOT NULL,
-    action      TEXT NOT NULL,        -- done | wrong
+    action      TEXT NOT NULL,        -- done | wrong | snooze | worked | failed
     day         TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT ''  -- sudden | trend | budget ('' = before v0.5)
 );
 
 CREATE TABLE IF NOT EXISTS inbox (
@@ -143,7 +147,39 @@ CREATE TABLE IF NOT EXISTS inbox (
     read        INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS change_effects (
+    change_id   INTEGER NOT NULL REFERENCES changes(id),
+    metric      TEXT NOT NULL,
+    rel         REAL NOT NULL,        -- after vs before, as a share
+    z           REAL NOT NULL,
+    verdict     TEXT NOT NULL,        -- better | worse | same | unknown
+    PRIMARY KEY (change_id, metric)
+);
+
+CREATE TABLE IF NOT EXISTS fix_tries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    universe_id INTEGER NOT NULL,
+    key         TEXT NOT NULL,        -- the finding it was meant to fix
+    metric      TEXT NOT NULL,
+    split       TEXT NOT NULL,
+    fix         TEXT NOT NULL,        -- id of the suggestion shown then ('' = none)
+    marked_day  TEXT NOT NULL,        -- data day it was marked fixed
+    check_on    TEXT NOT NULL,        -- data day to check it
+    usual       REAL,                 -- normal level before the problem
+    bad         REAL,                 -- level while the problem lasted
+    after       REAL,
+    result      TEXT,                 -- worked | partly | failed | unknown (NULL = waiting)
+    announced   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
 """
+
+# Columns added after a table first shipped: (table, column, definition).
+MIGRATIONS = (
+    ("feedback", "kind", "TEXT NOT NULL DEFAULT ''"),
+    ("findings", "fix", "TEXT"),
+)
 
 
 def utcnow() -> str:
@@ -157,6 +193,10 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    for table, column, definition in MIGRATIONS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)",
                  (str(SCHEMA_VERSION),))
     conn.commit()

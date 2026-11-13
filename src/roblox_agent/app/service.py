@@ -47,7 +47,7 @@ _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _local_now() -> datetime:
-    return datetime.now()  # noqa: DTZ005 - report times are in the user's own clock
+    return datetime.now()  # report times are in the user's own clock
 
 
 def in_quiet_hours(now: datetime, start: str, end: str) -> bool:
@@ -415,7 +415,9 @@ class Service:
 
     def _to_today(self, result: checkup.Checkup) -> dict:
         items = [{"n": i, "key": f.key, "good": f.good, "severity": f.severity, "title": f.short(),
-                  "detail": f.headline(), "marked": None} for i, f in enumerate(result.top, 1)]
+                  "detail": f.headline(), "marked": None, "fix": f.fix,
+                  "cause": f.cause.text.removeprefix("Likely cause: ") if f.cause else ""}
+                 for i, f in enumerate(result.top, 1)]
         return {"status": result.status, "day": result.day, "items": items, "checked": result.checked,
                 "notes": result.notes, "weekly": result.extra}
 
@@ -521,6 +523,18 @@ class Service:
     def set_startup(self, on: bool) -> None:
         self._save("start_with_windows", bool(on))
         set_windows_startup(bool(on))
+
+    def learned(self) -> dict:
+        """What the checks have learned about this game (clicks, changes, fixes), as plain text."""
+        uid = self._cfg().universe_id
+        if not uid:
+            return {"text": ""}
+        conn = self._conn()
+        try:
+            from .. import learn
+            return {"text": learn.report(conn, uid)}
+        finally:
+            conn.close()
 
     def export_settings(self) -> dict:
         """Settings to move to a new PC. No key, no data, no install ID."""

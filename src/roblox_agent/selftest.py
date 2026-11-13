@@ -9,18 +9,31 @@ The pretend games are more realistic than the ``demo`` data: weekends are
 busier, small games are noisier, rates follow player counts, retention for
 the last days isn't known yet, and low-traffic splits are marked "too few
 players to trust", like on Roblox.
+
+It also checks that the right *cause* is named (a change you shipped, a shift
+to phones, a wave of new players, the game being shown less), and keeps a
+scorecard (``accuracy.json``) so a new version can't quietly get worse: the
+tests fail if any number drops below the saved scorecard.
+
+``roblox-agent selftest --mine`` plants the same kinds of problems into a
+copy of *your own game's* history, so you can see how well the checks work on
+your real numbers. Your data is never changed.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 
 from . import db
+
+SCORECARD = Path(__file__).with_name("accuracy.json")
 
 PLATFORMS = {"Computer": 0.40, "Phone": 0.42, "Tablet": 0.12, "Console": 0.06}
 # Typical values per platform. Overall = player-weighted mix.
@@ -136,7 +149,7 @@ def simulate(game: Game, end: date, days: int | None = None) -> dict[tuple[str, 
         dau_p: dict[str, float] = {}
         for plat, share in PLATFORMS.items():
             v = (game.dau * share * wf * math.exp(level) * _factor(game, "DailyActiveUsers", plat, i) * glitch
-                 * pop[n])
+                 * pop[n] * _factor(game, "PlatformShare", plat, i))
             dau_p[plat] = max(0.0, noisy(v, 0.03 + 1 / math.sqrt(max(v, 1))))
         dau = sum(dau_p.values())
         nss = {p: ("NotStatisticallySignificant" if dau_p[p] < NSS_BELOW else status) for p in PLATFORMS}
@@ -192,7 +205,11 @@ def simulate(game: Game, end: date, days: int | None = None) -> dict[tuple[str, 
         mau = sum(mau_window[-30:]) / len(mau_window[-30:]) * 6.5
         add("MonthlyActiveUsers", "", day, round(mau), status)
         add("DauMauStickiness", "", day, dau / mau, status)
-        seen = new / 0.02 * math.exp(rnd2.gauss(0, 0.05))
+        # People shown the game follow discovery (new-player events, a mobile feature), not a broken
+        # join or a bad update: those lose players *after* Roblox showed them the game.
+        reach = sum(game.dau * share * wf * math.exp(level) * _factor(game, "PlatformShare", plat, i)
+                    for plat, share in PLATFORMS.items()) * pop[n] * new_share[n]
+        seen = reach / 0.02 * math.exp(rnd2.gauss(0, 0.05))
         add("UniqueUsersWithImpressions", "", day, round(seen), status)
         add("EndToEndCVR", "", day, max(0.0, rnd2.gauss(0.02, math.sqrt(0.02 * 0.98 / max(seen, 1)))), status)
         if i >= 30:
@@ -233,6 +250,8 @@ class Scenario:
     status: tuple[str, ...] = ()      # acceptable statuses
     game: dict = field(default_factory=dict)
     cause: str = ""                   # expected answer to "why are fewer people playing": new | return
+    cause_of: tuple[str, str] = ("", "")  # (metric, kind): the item for metric must name this cause
+    changes: list[tuple[int, str, str]] = field(default_factory=list)  # (days before last day, title, rubric)
 
 
 SCENARIOS: list[Scenario] = [
@@ -269,10 +288,22 @@ SCENARIOS: list[Scenario] = [
              [Event("DailyActiveUsers", 0.8, 20)], [("DailyActiveUsers", None, True)], ("Watch", "Act now")),
     Scenario("fewer_new_players", "New players dry up over 5 weeks (the game is shown to fewer people)",
              [Event("NewPlayers", 0.65, 0, ramp_weeks=5)], [("DailyActiveUsers", None, True)],
-             ("Watch", "Act now"), cause="new"),
+             ("Watch", "Act now"), cause="new", cause_of=("DailyActiveUsers", "discovery")),
     Scenario("coming_back_less", "Since 4 weeks ago players return less often (stale content)",
              [Event("ComeBack", 0.9, 28), Event("ForwardD7Retention", 0.85, 28)],
              [("DailyActiveUsers", None, True)], ("Watch", "Act now"), cause="return"),
+    # ----- the right cause -----
+    Scenario("update_broke_d1", "An update ships, then day 1 retention falls by a quarter (cause: the update)",
+             [Event("ForwardD1Retention", 0.72, 4)], [("ForwardD1Retention", None, True)], ("Act now", "Watch"),
+             cause_of=("ForwardD1Retention", "change"), changes=[(5, "New tutorial", "2,1,1,0,0,2,1")]),
+    Scenario("phone_players_surge", "Phone players triple (featured on mobile): frame rate falls overall, "
+             "no device got slower (cause: player mix)",
+             [Event("PlatformShare", 3.0, 6, "Phone")], [("ClientFpsP10", None, True)], ("Watch",),
+             cause_of=("ClientFpsP10", "mix")),
+    Scenario("new_player_wave", "A wave of new players (a video), who come back less: day 1 retention dips "
+             "(cause: traffic)",
+             [Event("NewPlayers", 2.5, 6), Event("ForwardD1Retention", 0.7, 6)],
+             [("ForwardD1Retention", None, True)], ("Act now", "Watch"), cause_of=("ForwardD1Retention", "traffic")),
     Scenario("young_game_crashes", "Game with only 16 days of history: crashes triple on phones",
              [Event("ClientCrashRate15m", 3.0, 1, "Phone")], [("ClientCrashRate15m", "Phone", True)],
              ("Act now", "Watch"), {"days": 16}),
@@ -306,6 +337,7 @@ class Outcome:
     passed: bool
     why: str
     lines: list[str]
+    cause_ok: bool | None = None   # None = this scenario doesn't test a cause
 
 
 def _matches(item, metric: str, platform: str | None, is_issue: bool) -> bool:
@@ -323,6 +355,11 @@ def run_scenario(sc: Scenario, seed: int, end: date, checker: Callable | None = 
     conn = db.connect(":memory:")
     game = Game(seed=seed, events=sc.events, **sc.game)
     load(conn, 1, game, end)
+    if sc.changes:
+        from . import changes
+        for days_before, title, rubric in sc.changes:
+            scores = dict(zip(changes.FACTOR_KEYS, (int(x) for x in rubric.split(","))))
+            changes.log(conn, 1, title, scores, end - timedelta(days=1 + days_before))
     result = checker(conn, 1, end)
     top = list(result.top)
     why = []
@@ -342,12 +379,20 @@ def run_scenario(sc: Scenario, seed: int, end: date, checker: Callable | None = 
             why_text = {"new": "fewer new players", "return": "players coming back less"}
             want = why_text[sc.cause]
             why.append(f"wrong reason: said {why_text.get(got, got)}, wanted {want}")
+    cause_ok = None
+    if sc.cause_of[0]:
+        item = next((f for f in top if f.metric == sc.cause_of[0] and not f.good), None)
+        got = getattr(getattr(item, "cause", None), "kind", "none")
+        cause_ok = got == sc.cause_of[1]
+        if not cause_ok:
+            ok = False
+            why.append(f"wrong cause for {sc.cause_of[0]}: {got}, wanted {sc.cause_of[1]}")
     if not sc.expect:
         wrong = [f for f in top if not f.good]
         if wrong:
             ok = False
             why.append(f"false alarm: {wrong[0].metric} {getattr(wrong[0], 'split', '')}".strip())
-    return Outcome(sc, seed, result.status, ok, "; ".join(why), result.text().splitlines())
+    return Outcome(sc, seed, result.status, ok, "; ".join(why), result.text().splitlines(), cause_ok)
 
 
 def run_all(seeds: int = 5, end: date | None = None, checker: Callable | None = None,
@@ -374,6 +419,9 @@ def summary(res: dict) -> str:
     traps = [o for o in outs if not o.scenario.expect]
     lines.append(f"Planted problems found: {sum(o.passed for o in found)}/{len(found)}")
     lines.append(f"Calm cases kept calm:   {sum(o.passed for o in traps)}/{len(traps)}")
+    caused = [o for o in outs if o.cause_ok is not None]
+    if caused:
+        lines.append(f"Right cause named:      {sum(bool(o.cause_ok) for o in caused)}/{len(caused)}")
     if res["calm"]:
         calm = res["calm"]
         alarms = sum(1 for o in calm if not o.passed)
@@ -388,3 +436,147 @@ def summary(res: dict) -> str:
             if not o.passed:
                 lines.append(f"          seed {o.seed}: {o.why}")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------- scorecard ---
+
+def scorecard(res: dict) -> dict:
+    """The headline numbers, to compare one version with the next."""
+    outs: list[Outcome] = res["outcomes"]
+    found = [o for o in outs if o.scenario.expect]
+    traps = [o for o in outs if not o.scenario.expect]
+    caused = [o for o in outs if o.cause_ok is not None]
+    calm = res["calm"]
+    return {
+        "planted_found": sum(o.passed for o in found), "planted_total": len(found),
+        "calm_kept": sum(o.passed for o in traps), "calm_total": len(traps),
+        "causes_right": sum(bool(o.cause_ok) for o in caused), "causes_total": len(caused),
+        "sweep_alarms": sum(not o.passed for o in calm), "sweep_total": len(calm),
+        "sweep_act_now": sum(o.status == "Act now" for o in calm),
+    }
+
+
+def saved_scorecard() -> dict | None:
+    try:
+        return json.loads(SCORECARD.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def save_scorecard(card: dict, seeds: int, calm_runs: int) -> None:
+    from . import __version__
+    data = {"version": __version__, "seeds": seeds, "calm_runs": calm_runs, **card}
+    SCORECARD.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def regressions(card: dict, saved: dict | None) -> list[str]:
+    """Plain-language list of what got worse than the saved scorecard (empty = nothing)."""
+    if not saved:
+        return []
+    out = []
+    for key, total, label in (("planted_found", "planted_total", "planted problems found"),
+                              ("calm_kept", "calm_total", "calm cases kept calm"),
+                              ("causes_right", "causes_total", "causes named right")):
+        # Only comparable when the test is at least as big as before (new scenarios can be added).
+        if card[key] < saved.get(key, 0) and card[total] >= saved.get(total, 0):
+            out.append(f"{label}: {card[key]}, was {saved[key]}")
+    for key, label in (("sweep_alarms", "false alarms on calm days"), ("sweep_act_now", "'Act now' on calm days")):
+        if card[key] > saved.get(key, 0):
+            out.append(f"{label}: {card[key]}, was {saved[key]}")
+    return out
+
+
+def card_text(card: dict, saved: dict | None = None) -> str:
+    lines = [f"Planted problems found: {card['planted_found']}/{card['planted_total']}",
+             f"Calm cases kept calm:   {card['calm_kept']}/{card['calm_total']}",
+             f"Right cause named:      {card['causes_right']}/{card['causes_total']}"]
+    if card["sweep_total"]:
+        lines.append(f"Calm-day sweep: {card['sweep_alarms']}/{card['sweep_total']} days raised any issue, "
+                     f"{card['sweep_act_now']} said 'Act now'")
+    if saved:
+        bad = regressions(card, saved)
+        lines.append(f"Compared with the saved scorecard (v{saved.get('version', '?')}): "
+                     + ("worse on " + "; ".join(bad) if bad else "no worse on anything"))
+    return "\n".join(lines)
+
+
+# ------------------------------------------------- on your own game data ---
+
+PLANTS = (
+    ("Crashes double on every device (last 2 days)", "ClientCrashRate15m", "", 2.2, 1),
+    ("Crashes triple on phones (last 2 days)", "ClientCrashRate15m", "Platform=Phone", 3.0, 1),
+    ("A third of players gone (last 3 days)", "DailyActiveUsers", "", 0.65, 2),
+    ("Revenue down 60% (last 3 days)", "DailyRevenue", "", 0.4, 2),
+    ("Day 1 retention down a quarter (last 4 days)", "ForwardD1Retention", "", 0.72, 4),
+    ("Frame rate down 30% (last 3 days)", "ClientFpsP10", "", 0.7, 2),
+)
+
+
+REPLAYS = (0, 7, 14, 21)   # replay the check-up as if today were 0, 7, 14 and 21 days ago
+
+
+def run_on_own(conn: sqlite3.Connection, uid: int) -> str:
+    """Plant problems into copies of your game's own history and see if the check-up finds them.
+
+    Each problem is planted at several points in the past (the last day, a week
+    ago, two and three weeks ago), so one lucky or unlucky day can't decide the
+    result. Your database is only read; all changes happen in a copy.
+    """
+    from . import checkup
+    days = sorted({r[0][:10] for r in conn.execute(
+        "SELECT bucket_time FROM data_points WHERE universe_id=? AND metric='DailyActiveUsers' AND"
+        " breakdown_key='' AND granularity='OneDay'", (uid,))})
+    if not days:
+        return "No data stored yet. Pull your game's data first."
+    if len(days) < 35:
+        return f"Needs about 5 weeks of your game's history (has {len(days)} days)."
+    lines, found_all, tried_all = [], 0, 0
+    for plain, metric, split, factor, last in PLANTS:
+        found = tried = 0
+        for back in REPLAYS:
+            copy = sqlite3.connect(":memory:")
+            conn.backup(copy)  # your database is only read: everything is changed in the copy
+            copy.row_factory = sqlite3.Row
+            end = date.fromisoformat(days[-1]) - timedelta(days=back)
+            copy.execute("DELETE FROM data_points WHERE universe_id=? AND bucket_time>=?",
+                         (uid, (end + timedelta(days=1)).isoformat()))
+            hit = [r[0] for r in copy.execute(
+                "SELECT bucket_time FROM data_points WHERE universe_id=? AND metric=? AND breakdown_key=? AND"
+                " granularity='OneDay' ORDER BY bucket_time DESC", (uid, metric, split)).fetchall()]
+            if len(hit) < 28:
+                copy.close()
+                continue
+            hit = hit[:last + 1]
+            marks = ",".join("?" * len(hit))
+            if split:  # one device: that device, and the whole game by that device's share
+                whole = 1 + (factor - 1) * _share(copy, uid, split, hit)
+                copy.execute(f"UPDATE data_points SET value=value*? WHERE universe_id=? AND metric=? AND"
+                             f" breakdown_key=? AND bucket_time IN ({marks})", (factor, uid, metric, split, *hit))
+                copy.execute(f"UPDATE data_points SET value=value*? WHERE universe_id=? AND metric=? AND"
+                             f" breakdown_key='' AND bucket_time IN ({marks})", (whole, uid, metric, *hit))
+            else:  # whole game: every device moves too
+                copy.execute(f"UPDATE data_points SET value=value*? WHERE universe_id=? AND metric=? AND"
+                             f" bucket_time IN ({marks})", (factor, uid, metric, *hit))
+            res = checkup.run(copy, uid, today=end + timedelta(days=1), record=False)
+            ok = any(_matches(f, metric, split.split("=")[1] if split else None, True) for f in res.top)
+            found += ok
+            tried += 1
+            copy.close()
+        if tried:
+            found_all += found
+            tried_all += tried
+            lines.append(f"{found}/{tried}  {plain}")
+    if not tried_all:
+        return "Not enough history yet in the numbers this test uses."
+    return "\n".join([(f"On your own game's history: found {found_all} of {tried_all} planted problems "
+                      f"(each planted at {len(REPLAYS)} points in the past)."), *lines,
+                      "Your stored data was copied, not changed."])
+
+
+def _share(conn: sqlite3.Connection, uid: int, split: str, days: list[str]) -> float:
+    marks = ",".join("?" * len(days))
+    q = ("SELECT AVG(value) FROM data_points WHERE universe_id=? AND metric='DailyActiveUsers' AND breakdown_key=?"
+         f" AND bucket_time IN ({marks})")
+    part = conn.execute(q, (uid, split, *days)).fetchone()[0]
+    total = conn.execute(q, (uid, "", *days)).fetchone()[0]
+    return min(1.0, part / total) if part and total else 0.4

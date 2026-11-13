@@ -80,9 +80,10 @@ PROMPTS = [{
     "description": "Explain today's Roblox game check-up in plain language",
 }]
 PROMPT_TEXT = ("Call the daily_checkup tool once. Explain the result to a game developer in plain language, "
-               "under 120 words: what changed, the likely cause to check first, and one next step for each "
-               "ISSUE. If I say an item is fixed, wrong or should wait, use mark_item. If players are falling and "
-               "I ask why, use player_trend. "
+               "under 120 words: what changed, the likely cause (use its 'Likely cause' when given), and one "
+               "next step for each ISSUE, starting from its 'Try' line but made specific to this game. "
+               "If I say an item is fixed, wrong or should wait, use mark_item (it learns from this and checks "
+               "fixes later). If players are falling and I ask why, use player_trend. "
                "Don't call other tools unless I ask.")
 
 

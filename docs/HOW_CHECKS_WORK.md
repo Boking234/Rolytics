@@ -101,6 +101,57 @@ players (-26%)").
   (`tune off slide`), without touching the others. Later stages (the community database) can add
   checks and better starting values the same way.
 
+## Getting smarter over time (new in 0.5)
+
+Five things now improve the suggestions without any extra users and without an AI model. All of
+it is plain math on your computer.
+
+**1. It learns from your clicks.** Fixed, Snooze and Not a problem are labels. Items like the ones
+you usually act on move up the top 3; items like the ones you usually dismiss or snooze move down.
+It learns per number (e.g. crash rate) and per kind of check (sudden change, slow slide, rule-of-
+thumb limit). Safety rules: it never hides an item, never changes the status ("Act now" stays
+"Act now"), starts neutral, one click moves it only a little, and labels older than 6 months stop
+counting. False alarms still also raise the evidence bar, as before.
+
+**2. It learns from the changes you ship.** Every judged change keeps how it moved each number.
+Once two or more similar changes are judged, it spots patterns like "2 of your 3 economy changes
+lowered paying user conversion (-13% on average)". You see these when you log a similar change,
+in the weekly check-up, and as a clue when a number moves after a change. If your "Light" changes
+turn out harmful at least half the time (2 or more), new Light changes are judged after 7 days
+instead of 3.
+
+**3. Likely causes.** Each problem gets one short "Likely cause", from the best supported of:
+- *Player mix*: e.g. more players on phones, which run slower and crash more. The whole-game value
+  is recomputed with the old per-device values and today's device shares; if that explains most
+  of the move, no device actually got worse. These are never "Act now".
+- *A wave of new players*: new players a day up 30%+ over the same days. First-time visitors come
+  back and spend less, so retention and conversion dip for a while.
+- *Discovery*: for fewer players, is Roblox showing the game to fewer people, or are fewer viewers
+  pressing play (icon, thumbnail, title)?
+- *A change you shipped* just before it started (timing is a clue, not proof, so it comes last).
+
+Roblox's analytics API (as used here) gives no per-source split of players (search, home, ads,
+friends), so "where players came from" is inferred from new-player and impression numbers.
+
+**4. Something to try, then a check that it worked.** Each problem gets one "Try:" line picked
+for the number, the device, sudden vs slow, and the likely cause (e.g. "roll back change #4 for a
+day" or "test on a low-end phone"). Your AI agent turns it into specific steps. When you mark an
+item Fixed, it remembers the normal level and the problem level, and a few days later (longer for
+retention and slow problems) it says "the fix worked", "partly fixed" or "the fix didn't work
+yet". A failed fix puts the item back with the next idea; a fix that worked is shown first next
+time the same symptom appears. The check-up is still small: the longest test case is about 1,000
+characters (about 260 tokens).
+
+**5. It scores its own accuracy.** The self-test now also checks that the right cause is named
+(a shipped update, a phone surge, a new-player wave, being shown less). The results are saved in
+`accuracy.json`, and the automatic tests (which also run before every Windows build) fail if a new
+version finds fewer planted problems, names fewer right causes, or raises more false alarms.
+`roblox-agent selftest --mine` plants the same kinds of problems into a copy of your own game's
+history, at four points in the past, and tells you how many it found. Your data is only read.
+
+`roblox-agent learned` (and Settings > "What it has learned about your game" in the app) shows
+everything learned so far.
+
 ## What was learned from public data
 
 Roblox does not publish other games' retention, crashes or revenue, so there is no public
@@ -130,6 +181,12 @@ day) and 10 days is too short to learn a weekly rhythm. Scripts are in `research
 | **Statistical process control** (how factories and large live-service teams watch metrics): alarms need both statistical evidence and a minimum size; run tests for small sustained shifts. | The same two-part rule on every check, and the "2 to 7 days all off the same way" shift test. |
 
 ## How we know it works: the self-test
+
+**Version 0.5 (2026-11-13):** three cause tests were added (an update that breaks Day 1
+retention, phone players tripling, a wave of new players), making 28 situations. With 10 pretend
+games each: 194 of 200 planted problems found, 39 of 40 right causes named, 78 of 80 calm traps
+kept calm, 3 of 80 calm days raised any issue and none said "Act now". The 25 older situations
+score exactly as in 0.4 (165 of 170, 78 of 80), so nothing got worse. The table below is from 0.4.
 
 `roblox-agent selftest` builds pretend games on your computer, plants known problems in them,
 and checks the daily check-up names them. The pretend games are deliberately hard: busy weekends,
@@ -183,5 +240,10 @@ day, so a 3%-a-week slide only becomes certain after more weeks.
 - **Change verdicts are before/after comparisons, not A/B tests.** Something else that happened
   at the same time (a holiday, a YouTuber) can be the real cause. The verdict names overlapping
   changes; true A/B testing comes with the experiments stage.
+- **Likely causes and "Try" lines are starting points.** They were tested on pretend games
+  (7 of 8 causes right in the standard run; the miss was a problem that wasn't detected at all),
+  not on a real game yet. The fix ideas are common Roblox advice, not a diagnosis of your game.
+- **Learning needs your clicks.** Until you've marked a handful of items and logged a few changes,
+  nothing has been learned and everything behaves as in 0.4.
 - **Rule-of-thumb limits** (phones under 20 fps, servers under 40 fps, crash rate over 3%) are
   starting points, not Roblox official numbers.

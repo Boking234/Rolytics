@@ -16,6 +16,19 @@ using whole weeks so busy weekends can't fake a result. This is a
 before/after comparison, not an A/B test: something else that happened at
 the same time (a holiday, a YouTuber) can still be the real cause, so the
 verdict says when another change overlaps.
+
+Learning from verdicts
+----------------------
+Every judged change is kept with how it moved each number
+(``change_effects``). Once a few are judged, patterns show up, such as
+"2 of your 3 economy changes lowered paying conversion". These lessons are:
+
+* shown when you log a similar change ("past changes like this..."),
+* used as a clue when a number moves right after a change ships,
+* added to the weekly check-up,
+* and used to wait longer before judging a class of change that has
+  surprised you before (if your "Light" changes were harmful 2 times out of
+  3, new Light changes are judged after 7 days, like Medium ones).
 """
 
 from __future__ import annotations
@@ -51,6 +64,10 @@ CLASSES = ((5, "Light", 3), (10, "Medium", 7), (15, "Heavy", 14), (21, "Major", 
 WATCH = ("DailyActiveUsers", "AverageSessionLengthMinutes", "ForwardD1Retention", "ForwardD7Retention",
          "DailyRevenue", "PayingUsersCVR", "ClientCrashRate15m", "ClientFpsP10")
 BEFORE_DAYS = 14
+FACTOR_WORDS = {"reach": "wide-reaching", "systems": "multi-system", "spread": "core-loop", "economy": "economy",
+                "paid": "paid-item", "progress": "progression", "undo": "hard-to-undo"}
+LESSON_MIN = 2            # changes needed before a pattern counts
+BIG = 2                   # a factor score of 2 or 3 counts as "this kind of change"
 
 
 def weigh(scores: dict[str, int]) -> tuple[int, str, int]:
@@ -77,6 +94,9 @@ def log(conn: sqlite3.Connection, uid: int, title: str, scores: dict[str, int],
     if target and target not in catalog.BY_NAME:
         raise ValueError(f"Unknown metric '{target}'.")
     weight, cls, days = weigh(scores)
+    longer = surprising_class(conn, uid, cls)
+    if longer:
+        days = max(days, longer)
     shipped_on = shipped_on or datetime.now(timezone.utc).date()
     judge_on = shipped_on + timedelta(days=days)
     cur = conn.execute(
@@ -88,8 +108,14 @@ def log(conn: sqlite3.Connection, uid: int, title: str, scores: dict[str, int],
     advice = {"Light": "Ship normally.", "Medium": "An A/B test is better if you can.",
               "Heavy": "Try it on a small group first and watch linked systems.",
               "Major": "Roll it out in stages, tell players, and ship it on its own."}[cls]
-    return (f"Logged change #{cur.lastrowid} '{title}': {cls} ({weight}/21). I'll judge it on "
+    text = (f"Logged change #{cur.lastrowid} '{title}': {cls} ({weight}/21). I'll judge it on "
             f"{judge_on:%b} {judge_on.day}. {advice}")
+    if longer:
+        text += f" (Waiting longer than usual: your past {cls} changes were often harmful.)"
+    like = lessons(conn, uid, scores)
+    if like:
+        text += " Past changes like this: " + "; ".join(like[:2]) + "."
+    return text
 
 
 @dataclass
@@ -125,14 +151,18 @@ def _compare(conn: sqlite3.Connection, uid: int, metric: str, shipped: date, day
     return MetricResult(metric, rel, z, verdict, f"{spec.label} {fmt_change(spec, ma, mb, rel)}")
 
 
-def judge(conn: sqlite3.Connection, uid: int, row: sqlite3.Row) -> tuple[str, str]:
-    """Return (outcome, short explanation) for a change that is due."""
+def judge(conn: sqlite3.Connection, uid: int, row: sqlite3.Row, record: bool = False) -> tuple[str, str]:
+    """Return (outcome, short explanation) for a change that is due. ``record`` keeps each metric's move."""
     shipped = date.fromisoformat(row["shipped_on"])
     days = (date.fromisoformat(row["judge_on"]) - shipped).days
     metrics = list(WATCH)
     if row["target"] and row["target"] not in metrics:
         metrics.insert(0, row["target"])
     results = {m: _compare(conn, uid, m, shipped, days) for m in metrics}
+    if record:
+        conn.executemany("INSERT OR REPLACE INTO change_effects (change_id, metric, rel, z, verdict)"
+                         " VALUES (?, ?, ?, ?, ?)",
+                         [(row["id"], r.metric, r.rel, r.z, r.verdict) for r in results.values()])
     important_worse = [r for r in results.values() if r.verdict == "worse" and catalog.get(r.metric).weight >= 2]
     better = [r for r in results.values() if r.verdict == "better"]
     target = results.get(row["target"]) if row["target"] else None
@@ -170,7 +200,7 @@ def due_notes(conn: sqlite3.Connection, uid: int, latest: date | None, record: b
     for row in rows:
         outcome, explain = row["outcome"], row["outcome_note"]
         if outcome is None:
-            outcome, explain = judge(conn, uid, row)
+            outcome, explain = judge(conn, uid, row, record=record)
         word = {"good": "looks good", "bad": "looks harmful", "inconclusive": "no clear result yet"}[outcome]
         notes.append(f"Change #{row['id']} '{row['title']}' ({row['class']}): {word}. {explain}.")
         if record:
@@ -192,3 +222,97 @@ def questions() -> str:
     for key, q, opts in FACTORS:
         lines.append(f"{key}: {q}. " + ", ".join(f"{i}={o}" for i, o in enumerate(opts)))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- lessons ---
+
+def _judged(conn: sqlite3.Connection, uid: int) -> list[tuple[sqlite3.Row, dict, dict[str, sqlite3.Row]]]:
+    out = []
+    for c in conn.execute("SELECT * FROM changes WHERE universe_id=? AND outcome IS NOT NULL ORDER BY id", (uid,)):
+        effects = {e["metric"]: e for e in conn.execute("SELECT * FROM change_effects WHERE change_id=?",
+                                                          (c["id"],))}
+        out.append((c, json.loads(c["scores"]), effects))
+    return out
+
+
+@dataclass
+class Lesson:
+    factor: str
+    metric: str
+    worse: bool
+    hits: int
+    total: int
+    avg_rel: float
+
+    def text(self) -> str:
+        spec = catalog.get(self.metric)
+        word = "lowered" if (self.avg_rel < 0) else "raised"
+        return (f"{self.hits} of your {self.total} {FACTOR_WORDS[self.factor]} changes {word} "
+                f"{spec.label.lower()} ({self.avg_rel * 100:+.0f}% on average)")
+
+
+def _lessons(conn: sqlite3.Connection, uid: int) -> list[Lesson]:
+    judged = _judged(conn, uid)
+    found: list[Lesson] = []
+    for factor in FACTOR_KEYS:
+        group = [(c, eff) for c, sc, eff in judged if int(sc.get(factor, 0)) >= BIG]
+        if len(group) < LESSON_MIN:
+            continue
+        metrics = {m for _, eff in group for m in eff}
+        for m in metrics:
+            for verdict in ("worse", "better"):
+                hits = [eff[m] for _, eff in group if m in eff and eff[m]["verdict"] == verdict]
+                if len(hits) >= LESSON_MIN and len(hits) * 2 >= len(group):
+                    avg = sum(h["rel"] for h in hits) / len(hits)
+                    found.append(Lesson(factor, m, verdict == "worse", len(hits), len(group), avg))
+    # Harm first, then the strongest patterns.
+    found.sort(key=lambda le: (not le.worse, -le.hits / le.total, -catalog.get(le.metric).weight))
+    return found
+
+
+def lessons(conn: sqlite3.Connection, uid: int, scores: dict | None = None) -> list[str]:
+    """Patterns in how your judged changes moved your numbers. With ``scores``: only ones like that change."""
+    out = []
+    for le in _lessons(conn, uid):
+        if scores is not None and int(scores.get(le.factor, 0)) < BIG:
+            continue
+        t = le.text()
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def similar_effect(conn: sqlite3.Connection, uid: int, change_row: sqlite3.Row, metric: str,
+                   worse: bool) -> str:
+    """'2 of your 3 economy changes did this too', if past changes like this one moved ``metric`` that way."""
+    try:
+        scores = json.loads(change_row["scores"])
+    except (TypeError, ValueError):
+        return ""
+    for le in _lessons(conn, uid):
+        if le.metric == metric and le.worse == worse and int(scores.get(le.factor, 0)) >= BIG:
+            return f"{le.hits} of your {le.total} {FACTOR_WORDS[le.factor]} changes did this too"
+    return ""
+
+
+def surprising_class(conn: sqlite3.Connection, uid: int, cls: str) -> int:
+    """Days to wait instead, if changes of this class were often harmful for you (0 = no change)."""
+    names = [c[1] for c in CLASSES]
+    if cls not in names[:2]:
+        return 0
+    rows = conn.execute("SELECT outcome FROM changes WHERE universe_id=? AND class=? AND outcome IS NOT NULL",
+                        (uid, cls)).fetchall()
+    bad = sum(1 for r in rows if r["outcome"] == "bad")
+    if len(rows) >= LESSON_MIN and bad >= LESSON_MIN and bad * 2 >= len(rows):
+        return CLASSES[names.index(cls) + 1][2]
+    return 0
+
+
+def track_record(conn: sqlite3.Connection, uid: int) -> str:
+    rows = conn.execute("SELECT outcome, COUNT(*) AS n FROM changes WHERE universe_id=? AND outcome IS NOT NULL"
+                        " GROUP BY outcome", (uid,)).fetchall()
+    n = {r["outcome"]: r["n"] for r in rows}
+    if not n:
+        return "No changes judged yet. Log changes you ship ('roblox-agent change') and it learns which help."
+    return (f"Your judged changes: {n.get('good', 0)} good, {n.get('bad', 0)} harmful, "
+            f"{n.get('inconclusive', 0)} no clear result.")

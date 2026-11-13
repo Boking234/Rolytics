@@ -18,6 +18,10 @@ How it works
    but never disappear while they last.
 5. The status is "Act now" only for a large, confident problem in crashes,
    players, retention or money. Any other problem gives "Watch".
+6. Each problem gets its likely cause (``causes``: device mix, a wave of new
+   players, discovery, or a change you shipped) and one thing to try first
+   (``fixes``). Items like the ones you usually act on rank a little higher,
+   ones you usually dismiss a little lower (``learn``).
 
 The check-up remembers what it showed (``findings`` table), so it can say
 "day 3" or "still there after you marked it fixed", and you (or your agent)
@@ -32,7 +36,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from . import catalog, checks, db, detect
+from . import catalog, causes, checks, db, detect, fixes, learn
 from .detect import Signal
 
 NSS = detect.NSS
@@ -102,6 +106,10 @@ class Finding:
     affected: float | None = None  # rough players per day, when it can be estimated
     corroborated: bool = False     # a device finding the whole-game numbers back up
     why: str = ""                  # for player declines: new vs returning players
+    cause: causes.Cause | None = None
+    fix_id: str = ""
+    fix: str = ""                  # one thing to try first (problems only)
+    learned: float = 1.0           # ranking factor learned from your clicks
 
     # Short names used by the report, the self-test and older code.
     metric = property(lambda self: self.sig.metric)
@@ -148,6 +156,8 @@ class Finding:
             parts.append(self.note)
         if self.why:
             parts.append(self.why)
+        if self.cause:
+            parts.append(self.cause.text)
         if self.impact:
             parts.append(self.impact[0].upper() + self.impact[1:])
         tail = f"Confidence {s.confidence}" + (", early estimate" if s.provisional else "")
@@ -158,6 +168,8 @@ class Finding:
         parts.append(tail)
         if self.also:
             parts.append("Also: " + "; ".join(self.also[:2]))
+        if self.fix:
+            parts.append("Try: " + self.fix)
         return ". ".join(parts) + "."
 
     def line(self) -> str:
@@ -382,6 +394,20 @@ def _group_families(findings: list[Finding]) -> list[Finding]:
     return list(best.values())
 
 
+def _merge_discovery(findings: list[Finding]) -> list[Finding]:
+    """A players drop explained by discovery tells one story with the discovery numbers: show it once."""
+    head = next((f for f in findings if f.cause and f.cause.kind == "discovery"), None)
+    if not head:
+        return findings
+    rest = []
+    for f in findings:
+        if f is not head and not f.good and f.sig.spec.family == "discovery":
+            head.also.insert(0, f.short())
+        else:
+            rest.append(f)
+    return rest
+
+
 def _journal(conn: sqlite3.Connection, uid: int) -> dict[str, sqlite3.Row]:
     return {r["key"]: r for r in conn.execute("SELECT * FROM findings WHERE universe_id=?", (uid,))}
 
@@ -402,6 +428,7 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
     latest: date | None = None
     history_days = None
     tuning = checks.load(conn, universe_id, today)
+    rank = learn.ranking(conn, universe_id, today)
     active = tuning.active()
     for spec in catalog.DEFAULT_METRICS:
         if spec.context:
@@ -439,11 +466,24 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
             f.reopened = row["state"] == "done"
             f.age = row["days_shown"] - (1 if row["last_shown"] == data_day else 0)
         f.impact, f.affected = _impact(f.sig, players)
+        prefer: tuple[str, ...] = ()
         if f.metric == "DailyActiveUsers" and not f.split and not f.good and f.sig.kind != "spike":
             from . import why as why_mod  # local import: why uses this module's helpers
-            f.why = why_mod.short(conn, universe_id)
-        f.score = _score(f)
+            w = why_mod.explain(conn, universe_id)
+            f.why = why_mod.short(conn, universe_id, w)
+            prefer = {"new": ("thumbnail", "reach"), "return": ("content",)}.get(w.cause if w else "", ())
+        f.cause = causes.find(conn, universe_id, f.sig, series)
+        f.learned = rank.factor(f.metric, learn.kind_of(f.key))
+        f.score = _score(f) * f.learned
         f.severity = _severity(f, players.get("", 0))
+        if f.cause and f.cause.kind == "mix":
+            if f.note.startswith("Mostly on"):
+                f.note = ""  # the mix explanation replaces "which device"
+            if f.severity == "act":
+                f.severity = "watch"  # no device got worse: worth a look, not dropping everything
+        if not f.good:
+            kind = "sudden" if f.sig.kind in SUDDEN else "slow"
+            f.fix_id, f.fix = fixes.suggest(conn, universe_id, f.metric, f.split, f.cause, kind, prefer)
         visible.append(f)
 
     # "Low" confidence means it may well be noise: counted, not shown (unless the
@@ -452,7 +492,7 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
     shown_ok = [f for f in visible if (f.sig.confidence != "low" or f.sig.learning)
                 and (f.good or f.affected is None or f.affected >= MIN_AFFECTED)]
     unsure = len(visible) - len(shown_ok)
-    grouped = _group_families(shown_ok)
+    grouped = _merge_discovery(_group_families(shown_ok))
     issues = sorted((f for f in grouped if not f.good), key=lambda f: -f.score)
     wins = sorted((f for f in grouped if f.good), key=lambda f: -f.score)
     top = (issues + wins)[:3]
@@ -478,6 +518,7 @@ def run(conn: sqlite3.Connection, universe_id: int, today: date | None = None, r
 
     from . import changes  # local import: changes uses this module's helpers
     notes += changes.due_notes(conn, universe_id, latest, record=record)
+    notes += fixes.due_notes(conn, universe_id, latest, record=record)
 
     result = Checkup(universe_id, status, data_day, top, checked, notes)
     if weekly is None and record and latest:
@@ -528,10 +569,10 @@ def _remember(conn: sqlite3.Connection, uid: int, data_day: str, result: Checkup
         peak = f.sig.rel if row is None or abs(f.sig.rel) > abs(row["peak_rel"] or 0) else row["peak_rel"]
         conn.execute(
             "INSERT OR REPLACE INTO findings (universe_id, key, metric, split, good, first_day, last_day,"
-            " days_shown, last_shown, state, state_until, peak_rel, last_line, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " days_shown, last_shown, state, state_until, peak_rel, last_line, updated_at, fix)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (uid, f.key, f.metric, f.split, int(f.good), first, max(data_day, row["last_day"] if row else ""),
-             days_shown, last_shown, state, until, peak, f.headline(), now))
+             days_shown, last_shown, state, until, peak, f.headline(), now, f.fix_id or None))
     conn.execute(
         "INSERT OR REPLACE INTO checkups (universe_id, data_day, status, top_keys, text, created_at)"
         " VALUES (?, ?, ?, ?, ?, ?)",
@@ -568,12 +609,14 @@ def mark(conn: sqlite3.Connection, uid: int, item: int | str, action: str) -> st
     conn.execute("UPDATE findings SET state=?, state_until=?, updated_at=? WHERE universe_id=?"
                  " AND substr(key, 1, ?) = ?", (state, until, db.utcnow(), uid, len(prefix), prefix))
     metric, split = key.split("|")[:2]
-    if action in ("done", "wrong"):  # remembered for good: this is how the checks adapt to your game
-        conn.execute("INSERT INTO feedback (universe_id, metric, split, action, day, created_at)"
-                     " VALUES (?, ?, ?, ?, ?, ?)", (uid, metric, split, action, row["data_day"], db.utcnow()))
+    if action in ("done", "wrong", "snooze"):  # remembered for good: this is how the checks adapt to your game
+        learn.record(conn, uid, key, action, row["data_day"])
+    if action == "done":
+        fixes.start(conn, uid, key, row["data_day"])
     conn.commit()
     name = catalog.get(metric).label + _where(split)
-    return {"done": f"Marked '{name}' as fixed. I'll check in {DONE_GRACE_DAYS} days that it really is.",
+    wait = fixes.wait_days(metric, key)
+    return {"done": f"Marked '{name}' as fixed. I'll check in about {wait} days that it really is.",
             "snooze": f"Snoozed '{name}' for {SNOOZE_DAYS} days.",
             "wrong": f"Noted that '{name}' was a false alarm. Hidden for {WRONG_DAYS} days, and it will need "
                      "stronger evidence from now on.",

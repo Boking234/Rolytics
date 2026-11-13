@@ -122,7 +122,8 @@ def load(conn: sqlite3.Connection, uid: int, today: date | None = None) -> Tunin
     t.limits = tuple((m, k, lim) for m, (k, lim) in merged.items())
     since = ((today or datetime.now(timezone.utc).date()) - timedelta(days=FEEDBACK_DAYS)).isoformat()
     for r in conn.execute("SELECT metric, split, action, COUNT(*) AS n FROM feedback WHERE universe_id=?"
-                          " AND day>=? GROUP BY metric, split, action", (uid, since)):
+                          " AND day>=? AND action IN ('done', 'wrong') GROUP BY metric, split, action",
+                          (uid, since)):
         k = (r["metric"], r["split"])
         step = WRONG_STEP if r["action"] == "wrong" else -DONE_STEP
         t.feedback[k] = t.feedback.get(k, 0.0) + step * r["n"]
@@ -139,8 +140,11 @@ def describe(conn: sqlite3.Connection, uid: int) -> str:
     lines.append("Limits: " + "; ".join(
         f"{catalog.get(m).label} {'at least' if k == 'min' else 'at most'} {lim:g}" for m, k, lim in t.limits) + ".")
     if t.feedback:
-        lines.append("Learned from your verdicts (needs stronger evidence now): " + ", ".join(
+        lines.append("Needs stronger evidence now (you marked false alarms): " + ", ".join(
             catalog.get(m).label + (f" [{s}]" if s else "") for (m, s) in t.feedback) + ".")
-    else:
-        lines.append("No false alarms marked yet. 'roblox-agent mark N wrong' teaches the checks.")
+    from . import learn
+    ranked = learn.ranking(conn, uid).lines()
+    lines += ranked
+    if not t.feedback and not ranked:
+        lines.append("Nothing learned from your clicks yet. Fixed, Snooze and Not a problem all teach it.")
     return "\n".join(lines)

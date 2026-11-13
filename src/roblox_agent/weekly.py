@@ -4,7 +4,9 @@
    Whole weeks are compared, so every weekday counts once and busy weekends
    can't fake a change.
 2. Issues: new this week, still going, and fixed.
-3. Changes you shipped: good, harmful, no clear result, or still waiting.
+3. Changes you shipped: good, harmful, no clear result, or still waiting,
+   plus what your judged changes taught so far ("2 of your 3 economy
+   changes lowered paying conversion").
 4. Next week: the top 3 things to work on.
 
 (Lessons from other games come later, with the community database.)
@@ -50,6 +52,7 @@ class Weekly:
     fixed: list[str] = field(default_factory=list)
     false_alarms: int = 0
     change_lines: list[str] = field(default_factory=list)
+    lessons: list[str] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
     lifecycle: str = ""
 
@@ -67,6 +70,8 @@ class Weekly:
             out.append(self.lifecycle)
         if self.change_lines:
             out.append("Changes: " + " ".join(self.change_lines))
+        if self.lessons:
+            out.append("Learned from your changes: " + "; ".join(self.lessons) + ".")
         if self.next_steps:
             out.append("Next week: " + " ".join(f"{i}) {s}" for i, s in enumerate(self.next_steps, 1)))
         return "\n".join(out)
@@ -133,6 +138,8 @@ def build(conn: sqlite3.Connection, uid: int, latest: date) -> Weekly:
             w.change_lines.append(f"{head} {word}, {c['outcome_note']}.")
         else:
             w.change_lines.append(f"{head} waiting, judge on {_day(judge_on)}.")
+
+    w.lessons = changes.lessons(conn, uid)[:2]
 
     open_rows.sort(key=lambda r: -catalog.get(r["metric"]).weight * min(abs(r["peak_rel"] or 0), 2))
     seen: set[str] = set()

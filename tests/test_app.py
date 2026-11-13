@@ -314,7 +314,7 @@ def test_server_full_setup_never_echoes_key(running):
         assert code == 200 and json.loads(body)["ok"], body
         assert KEY.encode() not in body
     wait_job(running.service)
-    for path in ("/api/state", "/api/today", "/api/inbox", "/api/export-settings"):
+    for path in ("/api/state", "/api/today", "/api/inbox", "/api/export-settings", "/api/learned"):
         code, body = call(running, path)
         assert code == 200 and KEY.encode() not in body
     code, body = call(running, "/report", token=None)

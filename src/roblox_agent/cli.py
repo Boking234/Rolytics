@@ -390,9 +390,31 @@ def cmd_tune(args: argparse.Namespace) -> int:
 
 
 def cmd_selftest(args: argparse.Namespace) -> int:
+    if args.mine:
+        conn, uid = _open_db(False)
+        _say("Planting known problems into a copy of your game's history...")
+        _say(selftest.run_on_own(conn, uid))
+        return 0
+    saved = selftest.saved_scorecard() or {}
+    standard = args.save or args.seeds is None  # the standard run can be compared with the saved scorecard
+    seeds = saved.get("seeds", 2) if standard else args.seeds
+    calm = saved.get("calm_runs", 45) if standard else args.calm
     _say("Planting known problems in pretend games and checking they're found (about a minute)...")
-    res = selftest.run_all(seeds=args.seeds, calm_runs=args.calm)
-    _say(selftest.summary(res))
+    res = selftest.run_all(seeds=seeds, calm_runs=calm)
+    _say(selftest.summary(res).split("\n\n", 1)[1])
+    card = selftest.scorecard(res)
+    _say("")
+    _say(selftest.card_text(card, saved if standard and saved else None))
+    if args.save:
+        selftest.save_scorecard(card, seeds, calm)
+        _say(f"Saved as the new scorecard: {selftest.SCORECARD}")
+    return 0
+
+
+def cmd_learned(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    from . import learn
+    _say(learn.report(conn, uid))
     return 0
 
 
@@ -483,9 +505,14 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
     tp.set_defaults(func=cmd_tune)
     stp = sub.add_parser("selftest", help="(advanced) prove the checks find planted problems")
-    stp.add_argument("--seeds", type=int, default=3, help=argparse.SUPPRESS)
+    stp.add_argument("--mine", action="store_true", help="plant problems into a copy of your own game's data")
+    stp.add_argument("--save", action="store_true", help=argparse.SUPPRESS)  # developers: new scorecard
+    stp.add_argument("--seeds", type=int, default=None, help=argparse.SUPPRESS)
     stp.add_argument("--calm", type=int, default=30, help=argparse.SUPPRESS)
     stp.set_defaults(func=cmd_selftest)
+    lp = sub.add_parser("learned", help="what it has learned about your game (clicks, changes, fixes)")
+    lp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
+    lp.set_defaults(func=cmd_learned)
     sub.add_parser("check", help="(advanced) test the API key").set_defaults(func=cmd_check)
     sub.add_parser("where", help="(advanced) where data and settings live").set_defaults(func=cmd_where)
     sub.add_parser("forget-key", help="(advanced) delete the saved API key").set_defaults(func=cmd_forget_key)

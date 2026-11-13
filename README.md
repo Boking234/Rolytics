@@ -45,6 +45,14 @@ The app is a page served only to your own computer (127.0.0.1) and protected by 
 made at each launch. The key is never shown again, never sent to the page after you paste it,
 and never given to the AI agent.
 
+## Getting smarter (new in 0.5)
+
+Each problem now comes with a **likely cause** (player mix, a wave of new players, being shown
+less, or a change you shipped) and **one thing to try**. Marking an item Fixed makes it check a
+few days later whether the fix worked. It learns from your clicks and from how your shipped
+changes turned out, and it keeps an accuracy scorecard so new versions can't get worse.
+See `docs/HOW_CHECKS_WORK.md` and `roblox-agent learned`.
+
 ## Quick start
 
 ```bash
@@ -59,7 +67,7 @@ roblox-agent why       # why player numbers are rising or falling
 roblox-agent app       # the desktop app (setup screens, today, inbox, settings)
 ```
 
-Advanced: `tune` (sensitivity, your own limits, switch checks off), `week`, `selftest`, `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
+Advanced: `learned`, `tune` (sensitivity, your own limits, switch checks off), `week`, `selftest` (`--mine` to test on your own data), `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
 
 ## AI agents (MCP)
 

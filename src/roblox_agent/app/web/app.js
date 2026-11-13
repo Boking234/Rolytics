@@ -397,10 +397,12 @@ async function renderToday() {
 function itemCard(it) {
   const cls = it.good ? "good" : (it.severity === "act" ? "act" : "watch");
   const tag = it.good ? "Good news" : (it.severity === "act" ? "Act now" : "Watch");
-  const marked = {done: "Marked as fixed. I'll check again in 3 days.", snooze: "Snoozed for 7 days.", wrong: "Marked as not a problem."}[it.marked];
+  const marked = {done: "Marked as fixed. I'll check in a few days that it worked.", snooze: "Snoozed for 7 days.", wrong: "Marked as not a problem."}[it.marked];
   return `<div class="card item ${cls} ${it.marked ? "marked" : ""}">
     <div class="row spread"><span class="pill ${cls}">${tag}</span><span class="small muted">#${it.n}</span></div>
     <p class="title" style="margin:8px 0 4px">${esc(it.title)}</p>
+    ${it.cause ? `<p class="small muted" style="margin:0 0 4px">Likely cause: ${esc(it.cause)}</p>` : ""}
+    ${it.fix ? `<p class="small" style="margin:0 0 4px"><b>Try:</b> ${esc(it.fix)}</p>` : ""}
     <details><summary>Details</summary><p class="small" style="margin-top:6px">${esc(it.detail)}</p></details>
     ${marked ? `<p class="small muted" style="margin:8px 0 0">${marked} <button class="btn link small" onclick="mark('${esc(it.key)}','open')">Undo</button></p>` :
       it.good ? "" : `<div class="row" style="margin-top:10px">
@@ -469,11 +471,13 @@ function renderSettings() {
       <div class="switch"><div>Roblox key<br><span class="small muted">${S.key_saved ? "Saved on this computer. Never shown." : "Not saved."}</span></div>
         <span class="row"><button class="btn small" onclick="redo('key')">Replace</button><button class="btn small" onclick="forgetKey()">Remove</button></span></div>
     </div>
+    <details class="card"><summary>What it has learned about your game</summary><pre class="body" id="learned">Loading…</pre></details>
     <div class="card"><h2>About</h2>
       <p class="small">Version ${esc(S.version)} · Data folder: <code>${esc(S.data_folder)}</code></p>
       <p class="small"><button class="btn link" onclick="showDoc('TERMS.md')">Terms</button> · <button class="btn link" onclick="showDoc('PRIVACY.md')">Privacy</button> ·
         <button class="btn link" onclick="exportSettings()">Export settings</button> · <button class="btn link" onclick="openLink('https://github.com/Boking234/roblox-analytics-agent')">Source code ↗</button></p>
     </div>`;
+  api("learned").then(r => { const el = document.getElementById("learned"); if (el) el.textContent = r.text || "Nothing yet."; });
 }
 const AGENT_NAMES = {"claude-code": "Claude Code", "claude-desktop": "Claude Desktop app", "codex": "OpenAI Codex CLI", "cursor": "Cursor",
                      "vscode": "VS Code (GitHub Copilot)", "gemini": "Gemini CLI", "windsurf": "Windsurf"};

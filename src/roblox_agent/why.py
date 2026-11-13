@@ -233,9 +233,9 @@ def explain(conn: sqlite3.Connection, uid: int) -> Why | None:
     return w
 
 
-def short(conn: sqlite3.Connection, uid: int) -> str:
-    """One clause for the daily check-up item."""
-    w = explain(conn, uid)
+def short(conn: sqlite3.Connection, uid: int, w: Why | None = None) -> str:
+    """One clause for the daily check-up item. Pass ``w`` if you already have it."""
+    w = w or explain(conn, uid)
     if not w or w.rel > -STEADY or w.cause in ("", "none", "unknown"):
         return ""
     if w.cause == "new":
