@@ -11,8 +11,12 @@ Cursor, VS Code, Gemini CLI, Windsurf) via a built-in MCP server.
 - No cloud server, no paid APIs, no account. Your data and API key never leave your computer.
 - Needs only Python 3.10+ (standard library only, nothing else to install).
 - Keeps performance data past Roblox's 28-day limit by snapshotting it on every pull.
-- Cheap for AI: all math runs locally, and the agent gets ~300-400 tokens per check-up
-  (tests enforce the limit). See [design notes](docs/DESIGN_NOTES.md).
+- Checks you can trust: compares each day with the same weekday, ignores normal wobble, catches
+  slow slides, says which device a problem is on, and estimates how many players it affects.
+  `roblox-agent selftest` plants known problems in pretend games and shows they're found
+  (see [how the checks work](docs/HOW_CHECKS_WORK.md)).
+- Cheap for AI: all math runs locally. A check-up is ~100-350 tokens of text (tests enforce
+  the limit). See [design notes](docs/DESIGN_NOTES.md).
 
 **Not a coder? Follow the [setup guide](docs/SETUP_GUIDE.md).**
 
@@ -24,9 +28,11 @@ roblox-agent demo      # see it with made-up numbers, no key needed
 roblox-agent           # first time: 3-step setup; after that: today's top 3
 roblox-agent view      # the same as a page, with all charts folded below
 roblox-agent connect   # pick your AI agent (claude-code, claude-desktop, codex, cursor, vscode, gemini, windsurf)
+roblox-agent mark 1 done          # item 1 is fixed (or: snooze = hide 7 days, wrong = false alarm)
+roblox-agent change "Shorter tutorial"   # log a change; 7 quick questions score how heavy it is
 ```
 
-Advanced: `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
+Advanced: `week`, `selftest`, `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
 
 ## AI agents (MCP)
 
@@ -37,7 +43,9 @@ standard library and supports protocol versions 2024-11-05 through 2025-11-25 pl
 
 | Tool | Returns |
 | --- | --- |
-| `daily_checkup` | Status plus the top 3 changes. Refreshes data if older than 20h. |
+| `daily_checkup` | Status plus the top 3 changes, with size and confidence. Adds the weekly check-up on the first check-up of a week. Refreshes data if older than 20h. |
+| `mark_item` | Records "fixed", "snooze" or "false alarm" for an item |
+| `log_change` | Logs a change you shipped, scored with the change-weight rubric, so it gets judged later |
 | `metric_history` | One metric, at most 90 compact lines |
 | `list_metrics` | Stored metric names and splits |
 
@@ -64,14 +72,17 @@ Add others with `roblox-agent pull --metrics Name1,Name2` (names from the
 Roblox Analytics Query API ──► api.py (retries, waits on slow 202 queries, splits too-big ranges)
                                ingest.py (picks date ranges; re-pulls last 10 days to refresh estimates)
                                db.py ──► ~/.roblox-agent/analytics.db (SQLite)
-                               checkup.py ──► status + top 3 (same weekday baseline, skips low-sample days)
+                               detect.py ──► sudden changes, slow slides, limits (robust stats, per device)
+                               checkup.py ──► status + top 3 (merges, sizes, ranks, remembers past days)
+                               weekly.py / changes.py ──► weekly check-up, change-weight rubric, verdicts
                                report.py ──► view (HTML) / show (text) / export (CSV)
                                mcp_server.py ──► Claude / Codex / Cursor / ... (small text only)
 ```
 
 Database tables: `data_points` (one row per metric, split, and day, with Roblox's status:
 Valid / Projected / NotStatisticallySignificant), `raw_responses` (exact JSON from Roblox),
-`pull_runs`, `pull_errors`.
+`pull_runs`, `pull_errors`, plus `findings` (what was found and what you said about it),
+`checkups` (one row per day) and `changes` (changes you shipped and their verdicts).
 
 ## Privacy and safety
 
@@ -90,9 +101,9 @@ Tests run on Windows, macOS, and Linux on every push (GitHub Actions).
 
 ## Roadmap
 
-1. **Data pull, daily top 3, and MCP server for AI agents** (this release)
-2. Smarter checks (drop-off map, release/PlaceVersion links), mark issues fixed or ignored
-3. Check-up streaks and a "send to my agent" button
+1. Data pull, daily top 3, and MCP server for AI agents (0.1)
+2. **Trustworthy checks, weekly check-up, change-weight rubric, mark fixed/snooze/wrong** (0.2, this release)
+3. Drop-off map, release/PlaceVersion links, check-up streaks and a "send to my agent" button
 4. App screens and one-step installer
 5. Discord DM notifications
 6. Opt-in community lessons database

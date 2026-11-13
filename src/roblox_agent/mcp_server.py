@@ -5,8 +5,8 @@ Speaks the Model Context Protocol over stdio (one JSON message per line),
 using only the standard library. Start it with ``roblox-agent mcp``; agents
 start it for you once connected with ``roblox-agent connect``.
 
-Token budget: the tool list is ~250 tokens and a check-up answer is ~150-300
-tokens. The agent never sees raw data unless it asks for a capped history.
+Token budget: the tool list is ~400 tokens and a check-up answer is ~100-350
+tokens (up to ~600 on the first check-up of a week, which adds the weekly summary). The agent never sees raw data unless it asks for a capped history.
 The API key is read from your local settings and is never sent to the agent.
 """
 
@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, BinaryIO
 
-from . import __version__, catalog, checkup, config, db, ingest
+from . import __version__, catalog, changes, checkup, config, db, ingest
 from .api import AnalyticsClient, ApiError
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -30,23 +30,42 @@ STALE_HOURS = 20
 TOOLS = [
     {
         "name": "daily_checkup",
-        "description": "Today's health of the user's Roblox game: status plus the top 3 changes "
-                       "(issues first). Refreshes data from Roblox if older than 20h. Short text.",
+        "description": "Health of the user's Roblox game: status, top 3 changes with size and confidence; "
+                       "weekly summary on a week's first check-up. Short text.",
         "inputSchema": {"type": "object", "properties": {
-            "refresh": {"type": "boolean", "description": "Pull new data first if stale (default true)"}}},
+            "refresh": {"type": "boolean", "description": "Pull data if stale (default true)"},
+            "weekly": {"type": "boolean", "description": "Force the weekly summary"}}},
+    },
+    {
+        "name": "mark_item",
+        "description": "User's verdict on check-up item N: done (fixed), snooze (7 days), wrong (false alarm), open.",
+        "inputSchema": {"type": "object", "properties": {
+            "item": {"type": "integer"},
+            "action": {"type": "string", "enum": ["done", "snooze", "wrong", "open"]}},
+            "required": ["item", "action"]},
+    },
+    {
+        "name": "log_change",
+        "description": "Log a shipped game change to judge later. Call without scores to get the rubric.",
+        "inputSchema": {"type": "object", "properties": {
+            "title": {"type": "string"},
+            "scores": {"type": "object", "description": "0-3 each: reach systems spread economy paid progress undo"},
+            "shipped_on": {"type": "string", "description": "YYYY-MM-DD"},
+            "target": {"type": "string", "description": "Metric it should move"}},
+            "required": ["title"]},
     },
     {
         "name": "metric_history",
-        "description": "Daily values for one metric (max 90 days) as compact 'date value [flag]' lines.",
+        "description": "Daily values of one metric, max 90 days, as 'date value' lines.",
         "inputSchema": {"type": "object", "properties": {
-            "metric": {"type": "string", "description": "Metric name from list_metrics"},
+            "metric": {"type": "string"},
             "days": {"type": "integer", "description": "1-90, default 14"},
-            "split": {"type": "string", "description": "Optional, e.g. 'Platform=Phone'"}},
+            "split": {"type": "string", "description": "e.g. Platform=Phone"}},
             "required": ["metric"]},
     },
     {
         "name": "list_metrics",
-        "description": "Names of stored metrics and splits.",
+        "description": "Stored metric names and splits.",
         "inputSchema": {"type": "object", "properties": {}},
     },
 ]
@@ -57,7 +76,8 @@ PROMPTS = [{
 }]
 PROMPT_TEXT = ("Call the daily_checkup tool once. Explain the result to a game developer in plain language, "
                "under 120 words: what changed, the likely cause to check first, and one next step for each "
-               "ISSUE. Don't call other tools unless I ask.")
+               "ISSUE. If I say an item is fixed, wrong or should wait, use mark_item. "
+               "Don't call other tools unless I ask.")
 
 
 class Server:
@@ -78,7 +98,7 @@ class Server:
         last = datetime.fromisoformat(row["t"].replace("Z", "+00:00"))
         return datetime.now(timezone.utc) - last > timedelta(hours=STALE_HOURS)
 
-    def daily_checkup(self, refresh: bool = True) -> str:
+    def daily_checkup(self, refresh: bool = True, weekly: bool | None = None) -> str:
         if not self.universe_id:
             return "Not set up. Ask the user to run 'roblox-agent setup' in a terminal."
         note = ""
@@ -87,7 +107,22 @@ class Server:
                 ingest.pull(self.client, self.conn, progress=lambda m: print(m, file=sys.stderr))
             except ApiError as e:
                 note = f"\n(Refresh failed, showing saved data: {e})"
-        return checkup.run(self.conn, self.universe_id).text() + note
+        weekly = True if weekly else None  # None = only when a new week starts
+        return checkup.run(self.conn, self.universe_id, weekly=weekly).text() + note
+
+    def mark_item(self, item: int, action: str) -> str:
+        return checkup.mark(self.conn, self.universe_id, item, action)
+
+    def log_change(self, title: str, scores: dict | None = None, shipped_on: str | None = None,
+                   target: str | None = None) -> str:
+        if not scores:
+            return ("Score each factor 0-3 from what you know about the change (ask the user if unsure), "
+                    "then call log_change again with scores.\n" + changes.questions())
+        try:
+            day = date.fromisoformat(shipped_on) if shipped_on else None
+            return changes.log(self.conn, self.universe_id, title, scores, day, target)
+        except (ValueError, TypeError) as e:
+            return f"Not logged: {e}"
 
     def metric_history(self, metric: str, days: int = 14, split: str = "") -> str:
         days = max(1, min(int(days or 14), MAX_HISTORY_DAYS))
@@ -162,7 +197,8 @@ class Server:
             name = params.get("name")
             args = params.get("arguments") or {}
             fn = {"daily_checkup": self.daily_checkup, "metric_history": self.metric_history,
-                  "list_metrics": self.list_metrics}.get(name)
+                  "list_metrics": self.list_metrics, "mark_item": self.mark_item,
+                  "log_change": self.log_change}.get(name)
             if not fn:
                 raise _RpcError(-32602, f"Unknown tool: {name}")
             try:

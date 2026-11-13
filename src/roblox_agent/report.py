@@ -180,12 +180,26 @@ def html_report(conn: sqlite3.Connection, universe_id: int, check=None, days: in
     from . import checkup as _checkup  # local import avoids a cycle
     check = check or _checkup.run(conn, universe_id)
     tone = {"All good": "good", "Watch": "watch", "Act now": "act"}.get(check.status, "none")
+    tag = {"act": "Act now", "watch": "Watch", "good": "Good"}
     items = "".join(
-        f'<li class="{"win" if f.good else "issue"}"><span class="tag">{"Good" if f.good else "Issue"}</span>'
-        f"{html.escape(f.line().split(': ', 1)[1])}</li>" for f in check.top)
+        f'<li class="{"win" if f.good else f.severity}"><span class="tag">{i}. {tag.get(f.severity, "Issue")}</span>'
+        f"{html.escape(f.headline())}</li>" for i, f in enumerate(check.top, 1))
     if not items and check.checked:
         items = f'<li class="win"><span class="tag">Calm</span>No unusual changes across {check.checked} metrics.</li>'
     notes = "".join(f'<p class="muted">{html.escape(n)}</p>' for n in check.notes)
+    if check.top:
+        notes += ('<p class="muted small">Fixed one? <code>roblox-agent mark 1 done</code> · '
+                  'Not now: <code>mark 1 snooze</code> · False alarm: <code>mark 1 wrong</code></p>')
+    week_html = ""
+    if check.day:
+        from . import weekly as _weekly
+        wk = _weekly.build(conn, universe_id, datetime.fromisoformat(check.day).date())
+        rows = "".join(
+            f'<tr><td>{html.escape(a.name)}</td><td class="v-{a.verdict.replace(" ", "")}">{html.escape(a.verdict)}'
+            f'</td><td class="muted">{html.escape(a.detail)}</td></tr>' for a in wk.areas)
+        rest = "".join(f"<p>{html.escape(line)}</p>" for line in wk.text().splitlines()[2:])
+        week_html = (f'<details class="all" open><summary>This week</summary><table class="score">{rows}</table>'
+                     f"{rest}</details>")
 
     cards = []
     for s in summarize(conn, universe_id):
@@ -224,7 +238,9 @@ h1 {{ font-size:30px; margin:4px 0 4px; }}
 .top {{ list-style:none; padding:0; margin:20px 0 8px; }}
 .top li {{ background:var(--card); border:1px solid var(--rule); border-left:4px solid var(--good); border-radius:10px;
   padding:12px 14px; margin-bottom:10px; }}
-.top li.issue {{ border-left-color:var(--act); }}
+.top li.issue, .top li.act {{ border-left-color:var(--act); }} .top li.watch {{ border-left-color:var(--watch); }}
+.v-worse {{ color:var(--act); font-weight:600; }} .v-better {{ color:var(--good); font-weight:600; }}
+table.score td:first-child {{ width:120px; }} code {{ font-size:12px; }}
 .tag {{ display:inline-block; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
   color:var(--muted); margin-right:8px; }}
 .muted {{ color:var(--muted); font-size:13px; margin:4px 0; }} .small {{ font-size:11px; }}
@@ -244,6 +260,7 @@ td {{ padding:3px 4px; border-bottom:1px solid var(--rule); }} summary {{ cursor
 <p class="muted">Data through {html.escape(check.day or '-')} (UTC) · game {universe_id}</p>
 <ul class="top">{items}</ul>
 {notes}
+{week_html}
 <details class="all"><summary>All metrics</summary>
 <p class="muted">Orange dots: Roblox estimate, may change. Red dots: too few players to trust. Made {generated} on your computer.</p>
 <div class="grid">{grid}</div></details>

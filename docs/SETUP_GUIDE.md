@@ -76,13 +76,26 @@ The first time, a 3-step setup starts by itself:
 It finishes by showing your first check-up:
 
 ```
-Roblox game check-up, universe 123, data through 2026-11-12: Watch
-1. ISSUE: Client crash rate (15 min) on Phone up 60% (0.031 vs usual 0.019, 2026-11-12)
-2. GOOD: Daily revenue up 15% (6,200 vs usual 5,400, 2026-11-12)
+Roblox game check-up, universe 123, data through Nov 12: Act now
+1. ISSUE: Crash rate on Phone 3.8% vs usual 1.3% (+2.5 pts) on Nov 12. Whole game +0.9 pts.
+   Roughly 14 more players hitting crashes a day. Confidence high, early estimate.
+2. GOOD: Day 7 retention climbing for 12 weeks: 6.6% vs 5.6% (+1.0 pts). ...
 ```
 
 After that, just run `roblox-agent` once a day. It fetches what's new and shows the top 3.
+The first check-up of each week also shows a short weekly check-up.
 Roblox deletes performance data after 28 days, so run it at least weekly.
+
+Tell it what you did about an item (the number is the item's place in today's list):
+
+| Command | What it does |
+| --- | --- |
+| `roblox-agent mark 1 done` | You fixed it. Hidden for 3 days, then it comes back only if it's still happening. |
+| `roblox-agent mark 1 snooze` | Not now. Hidden for 7 days. |
+| `roblox-agent mark 1 wrong` | False alarm. Hidden for 30 days, and noted. |
+| `roblox-agent change "Shorter tutorial"` | You shipped a change. 7 quick questions score how heavy it is; it gets judged after 3 to 21 days. |
+
+How the checks decide what to show: [HOW_CHECKS_WORK.md](HOW_CHECKS_WORK.md).
 
 If the key isn't accepted, check that it has your game and `universe.analytics:read`, and that
 the IP setting allows `0.0.0.0/0`. Then run `roblox-agent setup` again.
@@ -92,8 +105,11 @@ the IP setting allows `0.0.0.0/0`. Then run `roblox-agent setup` again.
 If you skipped step 3, run `roblox-agent connect` any time and pick your agent. Restart the
 agent, then ask it: **"Run my Roblox daily check-up."**
 
-- The agent receives only the short check-up text (about 300 to 400 tokens, less than 0.2% of
-  reading a 1 MB file). It never sees your raw data unless you ask for a metric's history.
+- The agent receives only the short check-up text (about 100 to 350 tokens, plus about 400 for
+  the tool list once per session: well under 1% of reading a 1 MB file). It never sees your raw
+  data unless you ask for a metric's history.
+- You can also tell the agent "I fixed the phone crashes" or "log the shop change I shipped
+  today", and it will mark the item or score the change for you.
 - Your API key is never put in the agent's settings and never sent to the agent.
 
 ## 8. More views
@@ -102,6 +118,8 @@ agent, then ask it: **"Run my Roblox daily check-up."**
 | --- | --- |
 | `roblox-agent view` | The check-up as a page, with every chart under "All metrics" |
 | `roblox-agent demo` | The same with made-up numbers, including a pretend crash spike |
+| `roblox-agent week` | The weekly check-up, any day |
+| `roblox-agent selftest` | Plants known problems in pretend games and shows the checks find them |
 | `roblox-agent show` | A table of every metric |
 | `roblox-agent export` | A CSV file for Excel or Google Sheets |
 

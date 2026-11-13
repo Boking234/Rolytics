@@ -7,6 +7,9 @@ raw_responses  the exact JSON Roblox sent back, kept so nothing is lost
 data_points    one row per metric / breakdown / time bucket (the clean data)
 pull_errors    metrics that failed on a run, with a plain-language reason
 settings       small key/value store (schema version etc.)
+findings       what the check-ups found over time, and what you said about it
+checkups       one row per data day: the status and the top 3 that were shown
+changes        game changes you shipped, scored with the change-weight rubric
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -72,6 +75,50 @@ CREATE TABLE IF NOT EXISTS pull_errors (
     message     TEXT NOT NULL,
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS findings (
+    universe_id   INTEGER NOT NULL,
+    key           TEXT NOT NULL,      -- metric|split|direction[|trend|budget]
+    metric        TEXT NOT NULL,
+    split         TEXT NOT NULL,
+    good          INTEGER NOT NULL,
+    first_day     TEXT NOT NULL,      -- first data day it was seen
+    last_day      TEXT NOT NULL,      -- latest data day it was seen
+    days_shown    INTEGER NOT NULL DEFAULT 0,
+    last_shown    TEXT,
+    state         TEXT NOT NULL DEFAULT 'open',  -- open | done | snoozed | wrong
+    state_until   TEXT,
+    peak_rel      REAL,
+    last_line     TEXT,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (universe_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS checkups (
+    universe_id INTEGER NOT NULL,
+    data_day    TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    top_keys    TEXT NOT NULL,        -- JSON list, in the order shown (for "mark 1 done")
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (universe_id, data_day)
+);
+
+CREATE TABLE IF NOT EXISTS changes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    universe_id  INTEGER NOT NULL,
+    title        TEXT NOT NULL,
+    shipped_on   TEXT NOT NULL,
+    scores       TEXT NOT NULL,       -- JSON {factor: 0-3}
+    weight       INTEGER NOT NULL,
+    class        TEXT NOT NULL,       -- Light | Medium | Heavy | Major
+    judge_on     TEXT NOT NULL,
+    target       TEXT,                -- main metric it should move
+    outcome      TEXT,                -- good | bad | inconclusive (NULL = waiting)
+    outcome_note TEXT,
+    announced    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
 """
 
 
@@ -86,7 +133,7 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('schema_version', ?)",
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema_version', ?)",
                  (str(SCHEMA_VERSION),))
     conn.commit()
     return conn

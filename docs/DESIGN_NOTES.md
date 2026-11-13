@@ -12,7 +12,7 @@ Researched 2026-11-13. Sources are linked. **Applied** means it's in the tool no
 | 5 | **Short, guided, mandatory setup** (Superhuman: completion went from about 30% to 98% once setup was mandatory) | [First Round](https://review.firstround.com/superhuman-onboarding-playbook/) | **Applied:** "Step 1 of 3" wizard (game, key, AI agent). Running with no command starts it automatically. |
 | 6 | **Helpful empty states** (NN/g) | [NN/g](https://nngroup.com/articles/empty-state-interface-design) | **Applied:** no data shows one next step. A calm day says "No unusual changes across N metrics". |
 | 7 | **Streak on a tiny daily action** (Duolingo: a 7-day streak makes completion 3.6x more likely) | [Duolingo](https://blog.duolingo.com/how-duolingo-streak-builds-habit) | **Later:** a check-up streak with free "freeze" days and no paid repairs. |
-| 8 | **Hook loop: trigger, action, reward, investment** (Nir Eyal) | [Amplitude](https://amplitude.com/blog/the-hook-model) | **Later:** a Discord DM is the trigger and the top 3 is the reward. Marking an issue fixed or ignored is the investment, and it improves tomorrow's ranking. |
+| 8 | **Hook loop: trigger, action, reward, investment** (Nir Eyal) | [Amplitude](https://amplitude.com/blog/the-hook-model) | **Applied (0.2):** `mark 1 done / snooze / wrong` is the investment: fixed items are re-checked after 3 days, snoozed ones hide for 7, false alarms for 30. **Later:** the Discord DM as the trigger. |
 | 9 | **Few, smart notifications** (about 10% of people turn off push at 1 per week, and about 40% at 3 to 6) | [Business of Apps](https://www.businessofapps.com/marketplace/push-notifications/research/push-notifications-statistics/) | **Later:** at most one DM a day, sent only when there's news, and it backs off if ignored. |
 | 10 | **Celebrate real outcomes, not taps** (Robinhood removed confetti after regulators objected) | [CNBC](https://www.cnbc.com/2021/03/31/robinhood-gets-rid-of-confetti-feature-amid-scrutiny-over-gamification.html) | **Applied:** "GOOD" items are real metric gains, such as retention up 25%. |
 | 11 | **One main action per issue** | Combines patterns 2, 3 and 5 | **Applied (basic):** the agent's prompt asks for one next step per issue. **Later:** a "Send to my agent" button. |
@@ -33,11 +33,14 @@ All analysis runs locally in Python. The AI agent receives only:
 
 | What | Size |
 |---|---|
-| Tool list | ~900 characters |
-| Check-up text | ~150 to 400 characters |
-| Built-in prompt | ~230 characters |
-| **Total** | **about 300 to 400 tokens** |
+| Tool list (5 tools, sent once per session) | ~1,700 characters, about 400 tokens |
+| Daily check-up text | ~300 to 1,400 characters, about 100 to 350 tokens |
+| Weekly check-up (first check-up of a week only) | adds ~400 to 1,000 characters, about 100 to 250 tokens |
+| Built-in prompt | ~300 characters |
+| **Total for one check-up** | **about 600 to 850 tokens (up to ~1,100 on the weekly day)** |
 
-A 1 MB file is about 250,000 tokens, so this is about 0.15% of that. Automated tests fail if the
-check-up grows past 1,500 characters or the tool list grows past 2,000. Your agent's own
-built-in instructions cost extra, and that part depends on the agent, not on this tool.
+A 1 MB file is about 250,000 tokens, so a check-up costs about 0.3% of that. Automated tests fail if
+the daily check-up passes 1,500 characters in any test scenario, the weekly day passes 2,600, or
+the tool list passes 3,000. The tool list grew in 0.2 (two new tools: mark an item, log a change).
+Your agent's own built-in instructions cost extra, and that part depends on the agent, not on
+this tool.

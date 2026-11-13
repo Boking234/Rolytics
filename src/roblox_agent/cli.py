@@ -4,6 +4,8 @@ Most people only ever need:
     roblox-agent            today's check-up (sets things up the first time)
     roblox-agent view       the same, as a page with charts
     roblox-agent connect    pick the AI agent to use (Claude, Codex, ...)
+    roblox-agent mark 1 done        tell it item 1 is fixed (or: snooze, wrong)
+    roblox-agent change "name"      log a game change so it gets judged later
 """
 
 from __future__ import annotations
@@ -13,10 +15,10 @@ import getpass
 import os
 import sys
 import webbrowser
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import __version__, catalog, checkup, config, connect, db, ingest, report
+from . import __version__, catalog, changes, checkup, config, connect, db, ingest, report, selftest, weekly
 from .api import AnalyticsClient, ApiError, AuthError
 from .demo import FakeRoblox
 
@@ -101,12 +103,15 @@ def _do_pull(client: AnalyticsClient, conn, metrics=None, backfill_days: int = 3
     return result.status != "failed"
 
 
-def _print_checkup(conn, uid: int) -> None:
-    c = checkup.run(conn, uid)
+def _print_checkup(conn, uid: int, record: bool = True, weekly_too: bool | None = None) -> None:
+    c = checkup.run(conn, uid, record=record, weekly=weekly_too)
     _say()
     _say(c.text())
     _say()
-    _say("More: roblox-agent view")
+    if c.top and record:
+        _say("More: roblox-agent view   ·   Fixed it? roblox-agent mark 1 done")
+    else:
+        _say("More: roblox-agent view")
 
 
 # ------------------------------------------------------------ commands ---
@@ -274,8 +279,64 @@ def cmd_demo(args: argparse.Namespace) -> int:
                              sleep=lambda _s: None)
     _say("Practice mode: made-up numbers, no internet, no key.")
     ingest.pull(client, conn, backfill_days=120)
-    _print_checkup(conn, DEMO_UNIVERSE)
+    shipped = ingest.today_utc() - timedelta(days=9)
+    changes.log(conn, DEMO_UNIVERSE, "Shorter tutorial (example)",
+                dict(zip(changes.FACTOR_KEYS, (2, 1, 1, 0, 0, 1, 1))), shipped, "ForwardD1Retention")
+    _print_checkup(conn, DEMO_UNIVERSE, weekly_too=True)
     _write_view(conn, DEMO_UNIVERSE, config.home_dir() / "demo-report.html", not args.no_open)
+    return 0
+
+
+def cmd_mark(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    msg = checkup.mark(conn, uid, args.item, args.action)
+    _say(msg)
+    return 0 if not msg.startswith(("Unknown", "Pick", "No check-up", "The latest")) else 1
+
+
+def _ask_score(key: str, question: str, options: tuple[str, ...]) -> int:
+    _say(f"\n  {question}")
+    for i, o in enumerate(options):
+        _say(f"   {i} = {o}")
+    while True:
+        raw = _ask("  0-3: ").strip()
+        if raw in ("0", "1", "2", "3"):
+            return int(raw)
+        if not raw:
+            raise SystemExit("Cancelled. Nothing was logged.")
+        _say("  Type 0, 1, 2 or 3.")
+
+
+def cmd_change(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    if args.scores:
+        parts = [p.strip() for p in args.scores.split(",")]
+        if len(parts) != len(changes.FACTOR_KEYS):
+            raise ValueError(f"--scores needs {len(changes.FACTOR_KEYS)} numbers, e.g. 2,1,1,0,0,1,0")
+        scores = dict(zip(changes.FACTOR_KEYS, (int(p) for p in parts)))
+    else:
+        _say(f"How heavy is '{args.title}'? 7 quick questions (Enter to cancel).")
+        scores = {key: _ask_score(key, q, opts) for key, q, opts in changes.FACTORS}
+    shipped = date.fromisoformat(args.shipped) if args.shipped else None
+    _say(changes.log(conn, uid, args.title, scores, shipped, args.target))
+    return 0
+
+
+def cmd_week(args: argparse.Namespace) -> int:
+    conn, uid = _open_db(args.demo)
+    latest = conn.execute("SELECT MAX(substr(bucket_time,1,10)) FROM data_points WHERE universe_id=?",
+                          (uid,)).fetchone()[0]
+    if not latest:
+        _say("No data yet. Run:  roblox-agent")
+        return 1
+    _say(weekly.build(conn, uid, date.fromisoformat(latest)).text())
+    return 0
+
+
+def cmd_selftest(args: argparse.Namespace) -> int:
+    _say("Planting known problems in pretend games and checking they're found (about a minute)...")
+    res = selftest.run_all(seeds=args.seeds, calm_runs=args.calm)
+    _say(selftest.summary(res))
     return 0
 
 
@@ -317,6 +378,19 @@ def build_parser() -> argparse.ArgumentParser:
     cp = sub.add_parser("connect", help="choose the AI agent to use (Claude, Codex, Cursor...)")
     cp.add_argument("agent", nargs="?", choices=[a.key for a in connect.AGENTS], help="skip the menu")
     cp.set_defaults(func=cmd_connect)
+    mp = sub.add_parser("mark", help="mark item N of today's check-up: done, snooze or wrong")
+    mp.add_argument("item", type=int)
+    mp.add_argument("action", choices=list(checkup.ACTIONS))
+    mp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
+    mp.set_defaults(func=cmd_mark)
+    chp = sub.add_parser("change", help="log a game change you shipped, so it gets judged later")
+    chp.add_argument("title", help="short name, e.g. \"Shorter tutorial\"")
+    chp.add_argument("--shipped", help="date it went live, YYYY-MM-DD (default today)")
+    chp.add_argument("--target", help="metric it should move, e.g. ForwardD1Retention")
+    chp.add_argument("--scores", help="skip the questions: 7 numbers 0-3 (reach,systems,spread,"
+                                      "economy,paid,progress,undo)")
+    chp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
+    chp.set_defaults(func=cmd_change)
     dp = sub.add_parser("demo", help="try it with made-up numbers (no key needed)")
     dp.add_argument("--no-open", action="store_true")
     dp.set_defaults(func=cmd_demo)
@@ -334,6 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "export":
             sp.add_argument("--out")
         sp.set_defaults(func=fn)
+    wp = sub.add_parser("week", help="(advanced) show the weekly check-up now")
+    wp.add_argument("--demo", action="store_true")
+    wp.set_defaults(func=cmd_week)
+    stp = sub.add_parser("selftest", help="(advanced) prove the checks find planted problems")
+    stp.add_argument("--seeds", type=int, default=3, help=argparse.SUPPRESS)
+    stp.add_argument("--calm", type=int, default=30, help=argparse.SUPPRESS)
+    stp.set_defaults(func=cmd_selftest)
     sub.add_parser("check", help="(advanced) test the API key").set_defaults(func=cmd_check)
     sub.add_parser("where", help="(advanced) where data and settings live").set_defaults(func=cmd_where)
     sub.add_parser("forget-key", help="(advanced) delete the saved API key").set_defaults(func=cmd_forget_key)
