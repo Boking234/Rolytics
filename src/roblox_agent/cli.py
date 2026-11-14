@@ -418,6 +418,23 @@ def cmd_learned(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_funnels(args: argparse.Namespace) -> int:
+    from . import funnels
+    if args.code:
+        folder = Path(args.code).expanduser().resolve()
+        if not folder.is_dir():
+            _say(f"Not a folder: {folder}")
+            return 1
+        config.save_setting("code_folder", str(folder))
+    if args.show:
+        _say(funnels.summary())
+        return 0
+    _say("Working out your game's context, then asking your AI agent for funnels...")
+    _say(funnels.plan(force=args.again, edit_code=args.edit_code))
+    _say(f"\nContext file: {funnels.context_path()}\nLuau module : {funnels.luau_path()}")
+    return 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     from . import mcp_server
     mcp_server.serve()
@@ -510,6 +527,13 @@ def build_parser() -> argparse.ArgumentParser:
     stp.add_argument("--seeds", type=int, default=None, help=argparse.SUPPRESS)
     stp.add_argument("--calm", type=int, default=30, help=argparse.SUPPRESS)
     stp.set_defaults(func=cmd_selftest)
+    fp = sub.add_parser("funnels", help="have your AI agent plan player funnels and create the missing ones")
+    fp.add_argument("--again", action="store_true", help="ask the agent even if the game context didn't change")
+    fp.add_argument("--show", action="store_true", help="just list the funnels")
+    fp.add_argument("--code", metavar="FOLDER", help="your game's code folder (Rojo); scanned for systems "
+                                                    "and funnels already logged")
+    fp.add_argument("--edit-code", action="store_true", help="let the agent add the step calls to your code")
+    fp.set_defaults(func=cmd_funnels)
     lp = sub.add_parser("learned", help="what it has learned about your game (clicks, changes, fixes)")
     lp.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
     lp.set_defaults(func=cmd_learned)

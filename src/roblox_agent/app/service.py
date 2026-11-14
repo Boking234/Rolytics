@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .. import __version__, catalog, checkup, config, connect, db, ingest
+from .. import __version__, catalog, checkup, config, connect, db, funnels, ingest
 from ..api import AnalyticsClient, ApiError, AuthError
 from ..demo import FakeRoblox
 from . import discord_link
@@ -81,6 +81,8 @@ class Service:
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _today_cache: dict | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
+    funnel_runner: Callable | None = None       # tests swap the agent run (subprocess.run) for a fake
+    funnel_note: str = ""
 
     def __post_init__(self) -> None:
         if self.demo and self.transport is None:
@@ -318,6 +320,7 @@ class Service:
                 self._add_report(conn, cfg.universe_id, result, kind)
             finally:
                 conn.close()
+            self._funnels_if_changed()
             self.job.phase = "Done"
         except ApiError as e:
             self.job.error = config.redact(str(e), self._cfg().api_key)
@@ -524,6 +527,45 @@ class Service:
         self._save("start_with_windows", bool(on))
         set_windows_startup(bool(on))
 
+    # ------------------------------------------------------------- funnels ---
+    def _funnels_if_changed(self, force: bool = False) -> None:
+        """Refresh the game context file; if it changed, ask the agent for missing funnels."""
+        try:
+            self.job.phase = "Checking your game's funnels"
+            run = self.funnel_runner or funnels.subprocess.run
+            if self.demo:  # practice mode never runs a real agent or touches the internet
+                funnels.refresh_context(self.settings(), offline=True)
+                self.funnel_note = "Practice mode: your AI agent would plan funnels here."
+                return
+            self.funnel_note = funnels.plan(self.settings(), force=force, run=run,
+                                            get=lambda url: _get_json(url)).split("\n", 1)[0]
+        except Exception as e:  # funnels are extra: never break the daily report
+            self.funnel_note = f"Couldn't plan funnels: {type(e).__name__}"
+
+    def funnels(self) -> dict:
+        items = funnels.load()
+        return {"items": items, "note": self.funnel_note,
+                "agent_can_run": funnels.agent_command(self.settings().get("agent")) is not None,
+                "prompt": funnels.manual_prompt(), "luau": str(funnels.luau_path()),
+                "context": str(funnels.context_path())}
+
+    def plan_funnels(self) -> dict:
+        """'Plan again' in Settings: runs in the background like a report."""
+        with self._lock:
+            if self.job.running:
+                return _ok("Busy with a report; try again in a minute.")
+            self.job = Job(running=True, phase="Asking your AI agent for funnels")
+
+        def work() -> None:
+            try:
+                self._funnels_if_changed(force=True)
+            finally:
+                self.job.running = False
+                self.job.phase = "Done"
+                self.job.finished_at = time.time()
+        threading.Thread(target=work, daemon=True).start()
+        return _ok("Asking your AI agent. This takes a minute or two.")
+
     def learned(self) -> dict:
         """What the checks have learned about this game (clicks, changes, fixes), as plain text."""
         uid = self._cfg().universe_id
@@ -539,7 +581,7 @@ class Service:
     def export_settings(self) -> dict:
         """Settings to move to a new PC. No key, no data, no install ID."""
         s = self.settings()
-        keep = ("universe_id", "game_name", "genre", "systems", "report_time", "quiet_start", "quiet_end",
+        keep = ("universe_id", "game_name", "genre", "systems", "code_folder", "report_time", "quiet_start", "quiet_end",
                 "agent", "share_lessons", "discord")
         return {"roblox_analytics_agent_settings": 1, **{k: s[k] for k in keep if k in s}}
 

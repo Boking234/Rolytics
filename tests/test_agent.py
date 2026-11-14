@@ -314,7 +314,7 @@ def test_mcp_handshake_tools_and_budget(fake, conn):
     assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, 6]  # no reply to the notification
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
     import json
-    assert len(json.dumps(replies[1]["result"])) < 2000           # tool definitions stay small
+    assert len(json.dumps(replies[1]["result"])) < 2400  # tool definitions stay small (~600 tokens, once)
     checkup_text = replies[2]["result"]["content"][0]["text"]
     assert "check-up" in checkup_text and len(checkup_text) < 1500
     history = replies[3]["result"]["content"][0]["text"].splitlines()

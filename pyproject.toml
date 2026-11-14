@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "roblox-analytics-agent"
-version = "0.5.0"
+version = "0.6.0"
 description = "Local-first tool that pulls your Roblox game's analytics into a SQLite database."
 readme = "README.md"
 license = { text = "MIT" }

@@ -55,6 +55,33 @@ few days later whether the fix worked. It learns from your clicks and from how y
 changes turned out, and it keeps an accuracy scorecard so new versions can't get worse.
 See `docs/HOW_CHECKS_WORK.md` and `roblox-agent learned`.
 
+## Player funnels your AI plans (new in 0.6)
+
+The tool works out what your game is (name, genre and description from its public Roblox page,
+the systems you typed in setup, and, if you point it at your code with `--code`, which systems
+the scripts mention and which funnels they already log) and saves it to
+`~/.roblox-agent/game_context.json`. It then asks your connected AI agent to propose up to 3
+drop-off funnels for that game (onboarding, the main loop, the shop or progression) and creates
+only the ones that don't exist yet: same name or nearly the same steps counts as existing.
+
+New funnels go into `~/.roblox-agent/funnels.json` and a ready-to-paste server ModuleScript,
+`~/.roblox-agent/funnels/FunnelTracker.lua`, which logs them with Roblox's own
+`AnalyticsService` funnel events. Call `FunnelTracker.step(player, "Skip Shop", "Shop Opened")`
+at each step; results show in Creator Hub > Analytics > Funnels. With `--edit-code`, the agent
+also adds those calls to your code for you.
+
+It runs after each daily report, but only asks the agent when the game context changed, so it
+costs no tokens on normal days (the context the agent reads is capped at ~300 tokens). Claude
+Code, Codex and Gemini CLI run it on their own. Claude Desktop, Cursor, VS Code and Windsurf use
+the `plan-funnels` prompt instead. In the app: Settings > Player funnels.
+
+```bash
+roblox-agent funnels                       # refresh context, plan missing funnels
+roblox-agent funnels --code ~/MyGame       # also scan your Rojo project
+roblox-agent funnels --again --edit-code   # re-plan and let the agent add the calls
+roblox-agent funnels --show
+```
+
 ## Quick start
 
 ```bash
@@ -69,7 +96,7 @@ roblox-agent why       # why player numbers are rising or falling
 roblox-agent app       # the desktop app (setup screens, today, inbox, settings)
 ```
 
-Advanced: `learned`, `tune` (sensitivity, your own limits, switch checks off), `week`, `selftest` (`--mine` to test on your own data), `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
+Also: `funnels`. Advanced: `learned`, `tune` (sensitivity, your own limits, switch checks off), `week`, `selftest` (`--mine` to test on your own data), `pull`, `show`, `export`, `check`, `where`, `forget-key`, `mcp`.
 
 ## AI agents (MCP)
 
@@ -86,8 +113,10 @@ standard library and supports protocol versions 2024-11-05 through 2025-11-25 pl
 | `player_trend` | Why players rise or fall: new vs returning players, clues, device, lifecycle |
 | `metric_history` | One metric, at most 90 compact lines |
 | `list_metrics` | Stored metric names and splits |
+| `game_context` | What the game is and which funnels already exist (capped at ~300 tokens) |
+| `add_funnels` | Creates the proposed funnels that are missing and rewrites `FunnelTracker.lua` |
 
-There's also a `daily-checkup` prompt. Verified with Claude Code: `claude mcp list` shows it
+There are also `daily-checkup` and `plan-funnels` prompts. Verified with Claude Code: `claude mcp list` shows it
 connected, and `claude -p "Run my Roblox daily check-up"` answered from the tool.
 
 ## What it pulls

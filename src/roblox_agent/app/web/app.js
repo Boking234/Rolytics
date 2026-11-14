@@ -471,6 +471,7 @@ function renderSettings() {
       <div class="switch"><div>Roblox key<br><span class="small muted">${S.key_saved ? "Saved on this computer. Never shown." : "Not saved."}</span></div>
         <span class="row"><button class="btn small" onclick="redo('key')">Replace</button><button class="btn small" onclick="forgetKey()">Remove</button></span></div>
     </div>
+    <details class="card"><summary>Player funnels</summary><div class="body" id="funnels">Loading…</div></details>
     <details class="card"><summary>What it has learned about your game</summary><pre class="body" id="learned">Loading…</pre></details>
     <div class="card"><h2>About</h2>
       <p class="small">Version ${esc(S.version)} · Data folder: <code>${esc(S.data_folder)}</code></p>
@@ -478,6 +479,23 @@ function renderSettings() {
         <button class="btn link" onclick="exportSettings()">Export settings</button> · <button class="btn link" onclick="openLink('https://github.com/Boking234/Rolytics')">Source code ↗</button></p>
     </div>`;
   api("learned").then(r => { const el = document.getElementById("learned"); if (el) el.textContent = r.text || "Nothing yet."; });
+  loadFunnels();
+}
+async function loadFunnels() {
+  const el = document.getElementById("funnels");
+  if (!el) return;
+  const r = await api("funnels");
+  const rows = (r.items || []).map(f => `<div class="switch"><div>${esc(f.name)}<br><span class="small muted">${esc((f.steps || []).join(" › ") || "Logged in your code")}</span></div>
+      <span class="small muted" style="white-space:nowrap">${f.status === "in_game" ? "In your game" : "Add to game"}</span></div>`).join("");
+  el.innerHTML = (rows || `<p class="small muted">None yet. Your AI agent plans them from your game's details.</p>`)
+    + (r.note ? `<p class="small muted">${esc(r.note)}</p>` : "")
+    + `<p class="small muted">Logging code: <code>${esc(r.luau)}</code></p>`
+    + (r.agent_can_run ? `<button class="btn small" onclick="planFunnels()">Plan again</button>` : `<p class="small muted">${esc(r.prompt)}</p>`);
+}
+async function planFunnels() {
+  const r = await api("funnels", {});
+  const el = document.getElementById("funnels");
+  if (el) el.insertAdjacentHTML("beforeend", `<p class="small">${esc(r.message || "")}</p>`);
 }
 const AGENT_NAMES = {"claude-code": "Claude Code", "claude-desktop": "Claude Desktop app", "codex": "OpenAI Codex CLI", "cursor": "Cursor",
                      "vscode": "VS Code (GitHub Copilot)", "gemini": "Gemini CLI", "windsurf": "Windsurf"};
