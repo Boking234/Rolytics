@@ -1,0 +1,14 @@
+{
+  "version": "0.5.0",
+  "seeds": 2,
+  "calm_runs": 45,
+  "planted_found": 37,
+  "planted_total": 40,
+  "calm_kept": 16,
+  "calm_total": 16,
+  "causes_right": 7,
+  "causes_total": 8,
+  "sweep_alarms": 2,
+  "sweep_total": 45,
+  "sweep_act_now": 0
+}

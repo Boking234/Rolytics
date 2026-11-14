@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 190" width="320" height="190" font-family="Segoe UI, system-ui, sans-serif">
+<rect x="0.5" y="0.5" width="319" height="189" rx="10" fill="#ffffff" stroke="#d4d4d8"/>
+<rect x="0.5" y="0.5" width="319" height="26" rx="10" fill="#f4f4f5"/>
+<rect x="0.5" y="16" width="319" height="11" fill="#f4f4f5"/>
+<circle cx="14" cy="13" r="4" fill="#d4d4d8"/><circle cx="26" cy="13" r="4" fill="#d4d4d8"/><circle cx="38" cy="13" r="4" fill="#d4d4d8"/>
+<rect x="54" y="6" width="250" height="14" rx="7" fill="#ffffff" stroke="#e4e4e7"/>
+<text x="62" y="17" font-size="9" fill="#71717a">discord.com</text>
+<rect x="10" y="36" width="70" height="140" rx="6" fill="#fafafa"/><text x="18" y="54" font-size="9" fill="#3f3f46">Direct Messages</text><rect x="14" y="62" width="62" height="16" rx="4" fill="#dbeafe"/><text x="20" y="73" font-size="8.5" fill="#3f3f46">Analytics</text><rect x="92" y="50" width="200" height="56" rx="8" fill="#f4f4f5"/><text x="102" y="66" font-size="9" font-weight="700" fill="#18181b">Hi! You're connected.</text><text x="102" y="82" font-size="8.5" fill="#52525b">Your first report arrives tomorrow</text><text x="102" y="94" font-size="8.5" fill="#52525b">at 9:00.</text><rect x="89" y="47" width="206" height="62" rx="7" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="5 3"/>
+<circle cx="302" cy="172" r="12" fill="#2563eb"/><text x="302" y="176" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+</svg>

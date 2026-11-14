@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 190" width="320" height="190" font-family="Segoe UI, system-ui, sans-serif">
+<rect x="0.5" y="0.5" width="319" height="189" rx="10" fill="#ffffff" stroke="#d4d4d8"/>
+<rect x="0.5" y="0.5" width="319" height="26" rx="10" fill="#f4f4f5"/>
+<rect x="0.5" y="16" width="319" height="11" fill="#f4f4f5"/>
+<circle cx="14" cy="13" r="4" fill="#d4d4d8"/><circle cx="26" cy="13" r="4" fill="#d4d4d8"/><circle cx="38" cy="13" r="4" fill="#d4d4d8"/>
+<rect x="54" y="6" width="250" height="14" rx="7" fill="#ffffff" stroke="#e4e4e7"/>
+<text x="62" y="17" font-size="9" fill="#71717a">create.roblox.com/dashboard/creations/experiences/1234567890/overview</text>
+<rect x="10" y="36" width="78" height="140" rx="6" fill="#fafafa"/><rect x="14" y="43" width="70" height="16" rx="4" fill="#dbeafe"/><text x="20" y="54" font-size="9" fill="#3f3f46">Creations</text><text x="20" y="74" font-size="9" fill="#3f3f46">Analytics</text><text x="20" y="94" font-size="9" fill="#3f3f46">Credentials</text><text x="28" y="114" font-size="9" fill="#3f3f46">API Keys</text><text x="100" y="52" font-size="11" font-weight="700" fill="#18181b">My Game</text><rect x="100" y="62" width="60" height="60" rx="8" fill="#e4e4e7"/><text x="170" y="80" font-size="9" fill="#52525b">Overview</text><text x="170" y="96" font-size="8.5" fill="#71717a">Copy the address bar link,</text><text x="170" y="108" font-size="8.5" fill="#71717a">it has your game's number.</text><rect x="51" y="3" width="256" height="20" rx="7" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="5 3"/>
+<circle cx="302" cy="172" r="12" fill="#2563eb"/><text x="302" y="176" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+</svg>
