@@ -61,10 +61,10 @@ def _make_icon_image(size: int = 64):
     k = size / 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((2 * k, 2 * k, 62 * k, 62 * k), radius=14 * k, fill=(37, 99, 235, 255))
+    d.rounded_rectangle((2 * k, 2 * k, 62 * k, 62 * k), radius=14 * k, fill=(28, 27, 25, 255))
     for i, h in enumerate((18, 30, 24, 40)):
         x = 12 + i * 11
-        d.rounded_rectangle((x * k, (52 - h) * k, (x + 7) * k, 52 * k), radius=2 * k, fill=(255, 255, 255, 255))
+        d.rounded_rectangle((x * k, (52 - h) * k, (x + 7) * k, 52 * k), radius=2 * k, fill=(244, 242, 238, 255))
     return img
 
 
