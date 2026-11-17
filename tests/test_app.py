@@ -195,7 +195,9 @@ def test_settings_validation(svc):
 
 
 def test_quiet_hours_wrap_midnight():
-    at = lambda s: datetime.fromisoformat("2026-11-13 " + s)
+    def at(s):
+        return datetime.fromisoformat("2026-11-13 " + s)
+
     assert in_quiet_hours(at("23:00"), "22:00", "08:00")
     assert in_quiet_hours(at("07:59"), "22:00", "08:00")
     assert not in_quiet_hours(at("12:00"), "22:00", "08:00")
