@@ -12,7 +12,8 @@ Cursor, VS Code, Gemini CLI, Windsurf) via a built-in MCP server.
 
 - No cloud server, no paid APIs, no account. Your data and API key never leave your computer.
 - Needs only Python 3.10+ (standard library only, nothing else to install).
-- Keeps performance data past Roblox's 28-day limit by snapshotting it on every pull.
+- Keeps 2 years of daily history for players, retention and money (the most Roblox serves day by day),
+  and keeps performance data past Roblox's 28-day limit by snapshotting it on every pull.
 - Checks you can trust: compares each day with the same weekday, ignores normal wobble, catches
   slow slides, says which device a problem is on, and estimates how many players it affects.
   `roblox-agent selftest` plants known problems in pretend games and shows they're found
