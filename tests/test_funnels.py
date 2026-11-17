@@ -113,7 +113,10 @@ class FakeAgent:
 
 def test_plan_runs_agent_only_when_context_changes():
     agent = FakeAgent()
-    which = lambda name: "/usr/bin/" + name
+
+    def which(name):
+        return "/usr/bin/" + name
+
     msg = funnels.plan(settings(), run=agent, which=which, get=lambda url: GAME)
     assert "Created: Onboarding, Shop purchase" in msg
     assert agent.calls[0][:2] == ["claude", "-p"] and "mcp__roblox-agent__add_funnels" in agent.calls[0][-1]

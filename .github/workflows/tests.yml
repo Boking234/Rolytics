@@ -25,5 +25,5 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Lint
         run: ruff check .
-      - name: Tests (no internet, no API key: uses a pretend Roblox server)
+      - name: "Tests (no internet, no API key: uses a pretend Roblox server)"
         run: pytest -q
