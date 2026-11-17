@@ -11,7 +11,11 @@ from . import catalog, db
 from .api import AnalyticsClient, ApiError, AuthError, BudgetError
 
 GRANULARITY = "OneDay"
-DEFAULT_BACKFILL_DAYS = 365
+# How much history to keep for players/retention/money metrics. Doubled from 365 to 730 days
+# (2026-11-17): Roblox keeps ~4 years, but only serves daily values for ranges up to 2 years.
+DEFAULT_BACKFILL_DAYS = 730
+# Never ask Roblox for more than this many days in one request (keeps each query small).
+MAX_DAYS_PER_QUERY = 365
 # Re-pull this many recent days each run, because Roblox revises recent
 # "Projected" values and D7 retention needs 7 days to settle.
 REFRESH_DAYS = 10
@@ -57,6 +61,10 @@ def plan_window(spec: catalog.MetricSpec, last_stored: str | None, end: date,
 def _fetch_range(client: AnalyticsClient, conn: sqlite3.Connection, run_id: int,
                  spec: catalog.MetricSpec, dims: tuple[str, ...], start: date, end: date) -> int:
     """Query one date range; on 'too big' errors split it in half and try again."""
+    if (end - start).days > MAX_DAYS_PER_QUERY:
+        mid = end - timedelta(days=MAX_DAYS_PER_QUERY)
+        return (_fetch_range(client, conn, run_id, spec, dims, start, mid)
+                + _fetch_range(client, conn, run_id, spec, dims, mid, end))
     try:
         op = client.query_metric(spec.name, GRANULARITY, _iso(start), _iso(end),
                                  breakdown=list(dims) or None)
@@ -71,6 +79,33 @@ def _fetch_range(client: AnalyticsClient, conn: sqlite3.Connection, run_id: int,
                "endTime": _iso(end), "breakdown": list(dims)}
     db.save_raw(conn, run_id, client.universe_id, spec.name, request, op)
     n = db.save_points(conn, run_id, client.universe_id, spec.name, GRANULARITY, op)
+    conn.commit()
+    return n
+
+
+def _deepen(client: AnalyticsClient, conn: sqlite3.Connection, run_id: int, spec: catalog.MetricSpec,
+            dims: tuple[str, ...], end: date, backfill_days: int, last: str | None,
+            progress: Callable[[str], None]) -> int:
+    """Fill in older history once, for databases started with a shorter backfill.
+
+    Only standard metrics (performance data is gone from Roblox after 28 days).
+    Remembers how far back it has asked, so empty older ranges (a game that is
+    younger than the window) are never requested twice.
+    """
+    if spec.kind == catalog.PERFORMANCE or not last:
+        return 0
+    want = end - timedelta(days=backfill_days)
+    key = f"history_from:{client.universe_id}:{spec.name}:{','.join(dims)}"
+    asked = db.get_setting(conn, key)
+    first = db.earliest_point_time(conn, client.universe_id, spec.name, GRANULARITY, list(dims))
+    have_from = _parse_day(first) if first else end
+    if asked:
+        have_from = min(have_from, date.fromisoformat(asked))
+    if have_from <= want:
+        return 0
+    progress(f"  older history: {want} to {have_from - timedelta(days=1)}")
+    n = _fetch_range(client, conn, run_id, spec, dims, want, have_from)
+    db.set_setting(conn, key, want.isoformat())
     conn.commit()
     return n
 
@@ -95,6 +130,7 @@ def pull(client: AnalyticsClient, conn: sqlite3.Connection,
             progress(f"{label}: {start} to {stop - timedelta(days=1)}")
             try:
                 n = _fetch_range(client, conn, run_id, spec, dims, start, stop)
+                n += _deepen(client, conn, run_id, spec, dims, end, backfill_days, last, progress)
                 result.points += n
                 progress(f"  saved {n} data points")
             except AuthError:

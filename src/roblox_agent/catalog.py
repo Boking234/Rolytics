@@ -4,7 +4,7 @@ Names and allowed breakdowns follow
 https://create.roblox.com/docs/cloud/guides/analytics/metrics (checked 2026-11-13).
 
 "standard" metrics (players, money, retention) keep ~4 years of history on
-Roblox, so we backfill a year on the first run.
+Roblox, so we keep 2 years (730 days) and fill it in on the first run.
 "performance" metrics (crashes, FPS, memory) are deleted by Roblox after 28
 days, so we must pull them every day to keep a long history.
 """

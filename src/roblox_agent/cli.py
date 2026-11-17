@@ -87,7 +87,8 @@ def _stale(conn, uid: int) -> bool:
     return datetime.now(timezone.utc) - last > timedelta(hours=STALE_HOURS)
 
 
-def _do_pull(client: AnalyticsClient, conn, metrics=None, backfill_days: int = 365, verbose: bool = False) -> bool:
+def _do_pull(client: AnalyticsClient, conn, metrics=None, backfill_days: int = ingest.DEFAULT_BACKFILL_DAYS,
+             verbose: bool = False) -> bool:
     first = conn.execute("SELECT COUNT(*) FROM data_points WHERE universe_id=?", (client.universe_id,)).fetchone()[0] == 0
     if first:
         _say("Downloading your game's history (first time only, a few minutes)...")
@@ -481,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pp = sub.add_parser("pull", help="(advanced) download the latest data now")
     pp.add_argument("--backfill-days", type=int, default=ingest.DEFAULT_BACKFILL_DAYS,
-                    help="how far back the first run goes (max 730, default 365)")
+                    help="how much history to keep (max 730, default 730)")
     pp.add_argument("--metrics", help="comma-separated metric names")
     pp.add_argument("--details", action="store_true", help="show every step")
     pp.set_defaults(func=cmd_pull)
