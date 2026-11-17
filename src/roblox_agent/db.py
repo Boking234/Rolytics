@@ -281,6 +281,21 @@ def save_error(conn: sqlite3.Connection, run_id: int, metric: str, breakdown: st
                  (run_id, metric, breakdown, message, utcnow()))
 
 
+def earliest_point_time(conn: sqlite3.Connection, universe_id: int, metric: str,
+                        granularity: str, dims: list[str] | None = None) -> str | None:
+    """Oldest bucket stored for a metric, for one breakdown choice (same rules as latest_point_time)."""
+    sql = ("SELECT MIN(bucket_time) AS t FROM data_points WHERE universe_id=? AND metric=?"
+           " AND granularity=?")
+    args: list[Any] = [universe_id, metric, granularity]
+    if dims:
+        sql += " AND breakdown_key LIKE ?"
+        args.append(min(dims) + "=%")
+    else:
+        sql += " AND breakdown_key = ''"
+    row = conn.execute(sql, args).fetchone()
+    return row["t"] if row and row["t"] else None
+
+
 def latest_point_time(conn: sqlite3.Connection, universe_id: int, metric: str,
                       granularity: str, dims: list[str] | None = None) -> str | None:
     """Most recent bucket stored for a metric, for one breakdown choice.

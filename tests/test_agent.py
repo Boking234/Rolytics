@@ -396,3 +396,39 @@ def test_home_command_runs_setup_first_time(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda _p: "")
     assert cli.main([]) == 1  # empty answer: setup stops politely
     assert "Welcome" in capsys.readouterr().out
+
+
+# ------------------------------------------------- doubled history (730 days) ---
+
+def test_default_history_is_two_years_in_small_queries(conn):
+    fake = FakeRoblox(valid_key=KEY)
+    spec = [catalog.MetricSpec("Visits", catalog.STANDARD, "Visits")]
+    ingest.pull(make_client(fake), conn, spec, end=END)
+    assert ingest.DEFAULT_BACKFILL_DAYS == 730
+    assert conn.execute("SELECT COUNT(*) FROM data_points").fetchone()[0] == 730
+    for _, _, body in fake.calls:  # no single request over 365 days
+        start = date.fromisoformat(body["startTime"][:10])
+        stop = date.fromisoformat(body["endTime"][:10])
+        assert (stop - start).days <= ingest.MAX_DAYS_PER_QUERY
+
+
+def test_existing_one_year_database_gets_older_history_once(conn):
+    fake = FakeRoblox(valid_key=KEY)
+    spec = [catalog.MetricSpec("Visits", catalog.STANDARD, "Visits")]
+    client = make_client(fake)
+    ingest.pull(client, conn, spec, backfill_days=365, end=END)   # how older installs started
+    ingest.pull(client, conn, spec, end=END)                      # now: fills the older year
+    assert conn.execute("SELECT COUNT(*) FROM data_points").fetchone()[0] == 730
+    fake.calls.clear()
+    ingest.pull(client, conn, spec, end=END)                      # never re-asks for old days
+    assert len(fake.calls) == 1
+
+
+def test_performance_metrics_are_not_deepened(conn):
+    fake = FakeRoblox(valid_key=KEY)
+    spec = [catalog.BY_NAME["ServerCrashCount"]]
+    client = make_client(fake)
+    ingest.pull(client, conn, spec, end=END)
+    fake.calls.clear()
+    ingest.pull(client, conn, spec, end=END)
+    assert len(fake.calls) == 1  # only the recent refresh: Roblox drops performance data after 28 days

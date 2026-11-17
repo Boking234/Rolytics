@@ -82,7 +82,7 @@ The first time, a 3-step setup starts by itself:
 1. **Your game:** paste the dashboard link (or the Universe ID) and press Enter.
 2. **Your key:** paste it and press Enter. **It stays hidden while you paste. That's normal.**
    The tool checks it with Roblox first and only saves it if it works.
-   It then downloads your history (a year of players, retention and money, plus the last 27 days
+   It then downloads your history (2 years of players, retention and money, plus the last 27 days
    of performance), which takes a few minutes the first time.
 3. **Your AI helper (optional):** pick the agent you use. The options are Claude Code, the Claude
    Desktop app, Codex, Cursor, VS Code, Gemini CLI and Windsurf. Or press Enter to skip.
