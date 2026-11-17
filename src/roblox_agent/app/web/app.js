@@ -44,9 +44,6 @@ function gameIcon(g, size) {
 function statusClass(status) {
   return {"Act now": "act", "Watch": "watch", "All good": "good"}[status] || "none";
 }
-function statusMark(status) {
-  return {"Act now": "!", "Watch": "~", "All good": "✓"}[status] || "·";
-}
 function fmtDay(iso) {
   if (!iso) return "";
   const d = new Date(iso.length === 10 ? iso + "T12:00:00" : iso);
@@ -100,16 +97,18 @@ function go(name) {
 // --------------------------------------------------------------- setup ---
 function frame(inner, opts = {}) {
   const i = STEPS.indexOf(step);
-  const bars = STEPS.slice(0, -1).map((_, k) => `<span class="${k <= i ? "on" : ""}"></span>`).join("");
+  const rail = STEPS.slice(0, -1).map((name, k) => `<li class="${k < i ? "done" : k === i ? "now" : ""}"><span class="n">${k + 1}</span>${STEP_NAMES[name]}</li>`).join("");
   const back = redoSteps ? `<button class="btn link" onclick="redoSteps=null;step=null;load()">← Cancel</button>` : i > 0 && step !== "done" ? `<button class="btn link" onclick="go('${STEPS[i - 1]}')">← Back</button>` : "<span></span>";
-  const demo = S.demo ? `<div class="demo-banner">Practice mode: made-up numbers, nothing is saved to your real settings.</div>` : "";
-  return `${demo}<div class="steps">${bars}</div>
-    ${step !== "done" ? `<div class="stepnum">Step ${i + 1} of ${STEPS.length - 1}</div>` : ""}
+  const demo = S.demo ? `<div class="demo-banner">Practice mode · made-up numbers, nothing is saved to your real settings</div>` : "";
+  return `${demo}<div class="setup"><ol class="rail" aria-label="Setup steps">${rail}</ol><div class="setup-main">
+    ${step !== "done" ? `<div class="stepnum">Step ${i + 1} of ${STEPS.length - 1} · ${STEP_NAMES[step]}</div>` : ""}
     ${inner}
-    <div class="row spread" style="margin-top:18px">${back}${opts.next || ""}</div>`;
+    <div class="row spread footer-row">${back}${opts.next || ""}</div></div></div>`;
 }
 
+const STEP_NAMES = {terms: "Welcome", sharing: "Sharing", key: "Roblox key", game: "Your game", agent: "AI helper", discord: "Phone alerts", done: "Done"};
 function renderSetup() {
+  $app.className = "wide";
   const views = {terms: viewTerms, sharing: viewSharing, key: viewKey, game: viewGame, agent: viewAgent, discord: viewDiscord, done: viewDone};
   $app.innerHTML = frame(...views[step]());
   if (step === "agent") loadAgents();
@@ -123,21 +122,21 @@ function viewTerms() {
   const ready = age && draft.agree && (!minor || draft.guardian);
   return [`
     <h1>Welcome to Roblox Analytics Agent</h1>
-    <p class="muted">A daily check-up for your Roblox game. Here's the deal in plain words.</p>
-    <div class="grid3">
-      <div class="card"><h3>What it does</h3><p class="small">Reads your game's numbers from Roblox once a day and tells you the top 3 things that changed.</p></div>
-      <div class="card"><h3>Stays on your PC</h3><p class="small">Your key, your game's data and your reports. No account, no email, no tracking.</p></div>
-      <div class="card"><h3>Can go to the cloud</h3><p class="small">Only if you switch it on: anonymized lessons (next step) and Discord messages. Both are off now.</p></div>
-    </div>
+    <p class="lede">A daily check-up for your Roblox game. Here's the deal in plain words.</p>
+    <dl class="facts">
+      <dt>What it does</dt><dd>Reads your game's numbers from Roblox once a day and tells you the top 3 things that changed.</dd>
+      <dt>Stays on your PC</dt><dd>Your key, your game's data and your reports. No account, no email, no tracking.</dd>
+      <dt>Can go online</dt><dd>Only if you switch it on: anonymized lessons (next step) and Discord messages. Both are off now.</dd>
+    </dl>
     <p class="small"><button class="btn link" onclick="showDoc('TERMS.md')">Read the Terms of Service</button> · <button class="btn link" onclick="showDoc('PRIVACY.md')">Read the Privacy Policy</button></p>
-    <div class="card stack">
-      <h3>How old are you?</h3>
-      <p class="small muted">We only keep the age group, to switch features on or off. Nothing else about you.</p>
-      ${[["under13", "Under 13", "The app works fully on your PC. Discord and cloud sharing stay off."],
+    <div class="stack" style="margin-top:24px">
+      <div><h3>How old are you?</h3>
+      <p class="small muted">We only keep the age group, to switch features on or off. Nothing else about you.</p></div>
+      <div class="choices">${[["under13", "Under 13", "The app works fully on your PC. Discord and cloud sharing stay off."],
          ["13to17", "13 to 17", "A parent or guardian needs to read the terms with you."],
          ["18plus", "18 or older", ""]].map(([v, l, n]) => `
         <label class="choice"><input type="radio" name="age" value="${v}" ${age === v ? "checked" : ""} onchange="draft.age='${v}';renderSetup()">
-        <span><b>${l}</b>${n ? `<br><span class="small muted">${n}</span>` : ""}</span></label>`).join("")}
+        <span><b>${l}</b>${n ? `<br><span class="small muted">${n}</span>` : ""}</span></label>`).join("")}</div>
       ${minor ? `<label class="check"><input type="checkbox" ${draft.guardian ? "checked" : ""} onchange="draft.guardian=this.checked;renderSetup()">
         <span>A parent or guardian has read the Terms and Privacy Policy with me and agrees.</span></label>` : ""}
       <label class="check"><input type="checkbox" ${draft.agree ? "checked" : ""} onchange="draft.agree=this.checked;renderSetup()">
@@ -157,16 +156,16 @@ function viewSharing() {
   const kid = S.age === "under13";
   return [`
     <h1>Help other developers? (optional)</h1>
-    <p class="muted">When lots of games hit the same problem, everyone's check-ups get smarter. You can share anonymized lessons to help. It's off unless you switch it on.</p>
+    <p class="lede">When lots of games hit the same problem, everyone's check-ups get smarter. You can share anonymized lessons to help. It's off unless you switch it on.</p>
     <div class="card">
       <div class="switch"><div><b>Share anonymized lessons</b><br><span class="small muted">${kid ? "Not available under 13." : "You can change this any time in Settings."}</span></div>
         <input type="checkbox" aria-label="Share anonymized lessons" ${S.share_lessons ? "checked" : ""} ${kid ? "disabled" : ""} onchange="toggleSharing(this.checked)"></div>
     </div>
-    <div class="grid3" style="grid-template-columns:1fr 1fr">
-      <div class="card"><h3>Would be shared</h3><ul class="list small">
+    <div class="compare">
+      <div><p class="label">Would be shared</p><ul class="list small">
         <li>The kind of problem, e.g. "crash rate up on phones"</li><li>How big it was, as a percentage</li>
         <li>Your genre and a rough size band</li><li>Whether a fix worked</li></ul></div>
-      <div class="card"><h3>Never shared</h3><ul class="list small">
+      <div><p class="label">Never shared</p><ul class="list small">
         <li>Your key</li><li>Your game's name or ID</li><li>Player names or IDs</li>
         <li>Exact Robux numbers</li><li>Your code</li></ul></div>
     </div>
@@ -192,12 +191,12 @@ function viewKey() {
   const ready = r && r.ok;
   return [`
     <h1>Connect to Roblox</h1>
-    <p class="muted">The app needs a read-only key to see your game's numbers. It takes about 2 minutes.</p>
+    <p class="lede">The app needs a read-only key to see your game's numbers. It takes about 2 minutes.</p>
     <button class="btn" onclick="openLink('https://create.roblox.com/dashboard/credentials')">Open Roblox key page ↗</button>
     <div class="guide">${shots.map(([f, c], k) => `<figure><img src="${f}.svg" alt="Step ${k + 1}"><figcaption>${k + 1}. ${c}</figcaption></figure>`).join("")}</div>
     <p class="illus">Pictures are simplified drawings of Roblox's page, so yours may look a little different.</p>
     <div class="card stack">
-      <h3>Paste your key</h3>
+      <p class="label">Paste your key</p>
       ${S.key_saved && !draft.replace ? `<p>A key is already saved on this computer. <span class="muted small">(It's never shown.)</span></p>
         <div class="row"><button class="btn primary" onclick="keepKey()">Use the saved key</button><button class="btn" onclick="draft.replace=true;renderSetup()">Use a new key</button></div>` : `
       <input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="Paste with Ctrl+V" aria-label="API key">
@@ -222,7 +221,7 @@ function viewGame() {
   const genre = draft.genre ?? (g && g.genre) ?? "";
   return [`
     <h1>Pick your game</h1>
-    <p class="muted">Open your game on the Creator Dashboard and copy the link from the address bar. (The game's number works too.)</p>
+    <p class="lede">Open your game on the Creator Dashboard and copy the link from the address bar. (The game's number works too.)</p>
     <div class="row" style="align-items:flex-start;gap:16px">
       <figure style="margin:0;width:260px;max-width:100%" class="guide"><img src="game-1.svg" alt="Copy the address bar link"></figure>
       <div style="flex:1;min-width:240px" class="stack">
@@ -269,8 +268,8 @@ function viewAgent() {
       <span><b>${esc(a.label)}</b> ${a.found ? `<span class="pill good">Found on this PC</span>` : ""}</span></label>`).join("") : `<p class="muted">Looking for AI agents on this PC…</p>`;
   return [`
     <h1>Pick your AI helper</h1>
-    <p class="muted">Your AI agent can read each check-up (a few hundred words, never your key) and help fix what it finds. It uses your own plan, like Claude Pro or Max.</p>
-    <div class="stack">${list}
+    <p class="lede">Your AI agent can read each check-up (a few hundred words, never your key) and help fix what it finds. It uses your own plan, like Claude Pro or Max.</p>
+    <div class="choices">${list}
       <label class="choice"><input type="radio" name="agent" value="none" ${pick === "none" ? "checked" : ""} onchange="draft.agent='none';draft.result=null;renderSetup()">
       <span><b>No AI agent for now</b><br><span class="small muted">You still get the daily report and alerts in this app.</span></span></label>
     </div>
@@ -353,9 +352,10 @@ async function pollJob(started) {
 // ---------------------------------------------------------------- home ---
 async function renderHome() {
   const g = S.game || {};
-  const demo = S.demo ? `<div class="demo-banner">Practice mode: made-up numbers.</div>` : "";
+  const demo = S.demo ? `<div class="demo-banner">Practice mode · made-up numbers</div>` : "";
+  $app.className = "";
   $app.innerHTML = `${demo}
-    <header class="top">${gameIcon(g, 40)}<div><div class="name">${esc(g.name)}</div><div class="small muted" id="sub"></div></div>
+    <header class="top">${gameIcon(g, 34)}<div><div class="name">${esc(g.name)}</div><div class="small muted" id="sub"></div></div>
       <nav class="tabs">
         <button class="${tab === "today" ? "on" : ""}" onclick="setTab('today')">Today</button>
         <button class="${tab === "inbox" ? "on" : ""}" onclick="setTab('inbox')">Inbox${S.unread ? `<span class="badge">${S.unread}</span>` : ""}</button>
@@ -378,18 +378,17 @@ async function renderToday() {
   const lines = {"Act now": "Something big needs a look today.", "Watch": "A few things to keep an eye on.",
                  "All good": t.items.length ? "Nothing worrying. Here's what improved." : `No unusual changes across ${t.checked} metrics.`,
                  "No data": t.waiting || j.running ? "Your first report is on its way." : "No data yet."}[t.status] || "";
-  const busy = j.running ? `<div class="card"><p>${esc(j.phase)}…</p><div class="bar"><div style="width:${j.total_steps ? Math.round(100 * j.done_steps / j.total_steps) : 10}%"></div></div></div>` : "";
+  const busy = j.running ? `<div class="card"><p class="small">${esc(j.phase)}…</p><div class="bar"><div style="width:${j.total_steps ? Math.round(100 * j.done_steps / j.total_steps) : 10}%"></div></div></div>` : "";
   const err = j.error && !j.running ? msg({ok: false, message: "Last update failed: " + j.error}) : "";
   main.innerHTML = `
-    <div class="card status"><div class="dot ${cls}">${statusMark(t.status)}</div>
-      <div><h1 style="margin:0">${esc(t.status)}</h1><p class="muted" style="margin:0">${esc(lines)}</p></div></div>
+    <section class="status ${cls}"><h1>${esc(t.status)}</h1><p>${esc(lines)}</p></section>
     ${busy}${err}
-    ${t.items.map(it => itemCard(it)).join("")}
-    ${(t.notes || []).length ? `<p class="small muted">${t.notes.map(esc).join("<br>")}</p>` : ""}
-    ${t.weekly ? `<details class="card"><summary>This week's check-up</summary><pre class="body">${esc(t.weekly)}</pre></details>` : ""}
-    <div class="row" style="margin-top:6px">
-      <button class="btn" onclick="api('open-report', {})">All charts ↗</button>
+    ${t.items.length ? `<ol class="items">${t.items.map(it => itemCard(it)).join("")}</ol>` : ""}
+    ${(t.notes || []).length ? `<p class="notes">${t.notes.map(esc).join("<br>")}</p>` : ""}
+    ${t.weekly ? `<details class="card" style="margin-top:24px"><summary>This week's check-up</summary><pre class="body">${esc(t.weekly)}</pre></details>` : ""}
+    <div class="toolbar">
       <button class="btn" onclick="runNow()" ${j.running ? "disabled" : ""}>Check now</button>
+      <button class="btn" onclick="api('open-report', {})">All charts ↗</button>
       ${S.agent ? `<button class="btn" onclick="copyPrompt()">Copy question for my AI</button>` : ""}
     </div>
     ${S.paused ? `<p class="msg err">Daily reports are paused. <button class="btn link" onclick="saveSetting({paused:false})">Resume</button></p>` : ""}`;
@@ -398,18 +397,36 @@ function itemCard(it) {
   const cls = it.good ? "good" : (it.severity === "act" ? "act" : "watch");
   const tag = it.good ? "Good news" : (it.severity === "act" ? "Act now" : "Watch");
   const marked = {done: "Marked as fixed. I'll check in a few days that it worked.", snooze: "Snoozed for 7 days.", wrong: "Marked as not a problem."}[it.marked];
-  return `<div class="card item ${cls} ${it.marked ? "marked" : ""}">
-    <div class="row spread"><span class="pill ${cls}">${tag}</span><span class="small muted">#${it.n}</span></div>
-    <p class="title" style="margin:8px 0 4px">${esc(it.title)}</p>
-    ${it.cause ? `<p class="small muted" style="margin:0 0 4px">Likely cause: ${esc(it.cause)}</p>` : ""}
-    ${it.fix ? `<p class="small" style="margin:0 0 4px"><b>Try:</b> ${esc(it.fix)}</p>` : ""}
-    <details><summary>Details</summary><p class="small" style="margin-top:6px">${esc(it.detail)}</p></details>
-    ${marked ? `<p class="small muted" style="margin:8px 0 0">${marked} <button class="btn link small" onclick="mark('${esc(it.key)}','open')">Undo</button></p>` :
-      it.good ? "" : `<div class="row" style="margin-top:10px">
-      <button class="btn small" onclick="mark('${esc(it.key)}','done')">✓ Fixed</button>
-      <button class="btn small" onclick="mark('${esc(it.key)}','snooze')">Snooze 7 days</button>
-      <button class="btn small" onclick="mark('${esc(it.key)}','wrong')">Not a problem</button></div>`}
-  </div>`;
+  const k = esc(it.key);
+  return `<li class="item ${cls} ${it.marked ? "marked" : ""}">
+    <span class="num">${String(it.n).padStart(2, "0")}</span>
+    <div>
+      <span class="tag ${cls}">${tag}</span>
+      <p class="title">${titleWithDelta(it.title)}</p>
+      ${it.cause ? `<p class="cause">Likely cause: ${esc(it.cause)}</p>` : ""}
+      ${it.fix ? `<p class="try"><span class="label">Try</span>${esc(it.fix)}</p>` : ""}
+      <p class="detail" id="d-${k}" hidden>${esc(it.detail)}</p>
+      ${marked ? `<p class="small muted" style="margin:8px 0 0">${marked} <button class="btn link small" onclick="mark('${k}','open')">Undo</button></p>` : `
+      <div class="acts">
+        ${it.good ? "" : `<button class="btn quiet" onclick="mark('${k}','done')">Mark fixed</button>
+        <button class="btn quiet" onclick="mark('${k}','snooze')">Snooze 7 days</button>
+        <button class="btn quiet" onclick="mark('${k}','wrong')">Not a problem</button>`}
+        <span class="sep"></span>
+        <button class="btn quiet" aria-expanded="false" onclick="toggleDetail(this, 'd-${k}')">Details</button>
+      </div>`}
+    </div>
+  </li>`;
+}
+// "Daily revenue -22%" -> the change set in the number face, with a real minus sign.
+function titleWithDelta(title) {
+  const m = /^(.*?)\s([+-]\d[\d.,]*\s?(?:%|pts?|x)?)$/.exec(title || "");
+  if (!m) return esc(title);
+  return `${esc(m[1])} <span class="delta">${esc(m[2].replace(/^-/, "−"))}</span>`;
+}
+function toggleDetail(btn, id) {
+  const el = document.getElementById(id); if (!el) return;
+  el.hidden = !el.hidden; btn.setAttribute("aria-expanded", String(!el.hidden));
+  btn.textContent = el.hidden ? "Details" : "Hide details";
 }
 async function mark(key, action) {
   const r = await api("mark", {key, action});
@@ -427,18 +444,18 @@ async function renderInbox() {
   const main = document.getElementById("main");
   if (!main) return;
   document.getElementById("sub").textContent = "";
-  main.innerHTML = `<div class="row spread"><h2>Inbox</h2>${items.some(i => !i.read) ? `<button class="btn link" onclick="readAll()">Mark all read</button>` : ""}</div>
-    <div class="card">${items.length ? items.map(i => `
-      <div class="inbox-row" onclick="openItem(${i.id}, this)">
+  main.innerHTML = `<div class="row spread" style="margin-bottom:10px"><h2 style="margin:0">Inbox</h2>${items.some(i => !i.read) ? `<button class="btn link small" onclick="readAll()">Mark all read</button>` : ""}</div>
+    ${items.length ? `<div class="inbox">${items.map(i => `
+      <div class="inbox-row ${i.read ? "" : "unread"}" onclick="openItem(${i.id}, this)">
         <span class="${i.read ? "read-dot" : "unread-dot"}"></span>
-        <div style="flex:1"><div class="row spread"><b>${esc(i.title)}</b><span class="small muted">${esc(fmtWhen(i.created_at))}</span></div>
-        <pre class="body" hidden>${esc(i.body)}</pre></div></div>`).join("")
-      : `<p class="muted">Reports and alerts will show up here. The next one comes at ${esc(S.report_time)}.</p>`}</div>`;
+        <div style="min-width:0"><div class="row spread" style="flex-wrap:nowrap;align-items:baseline"><b>${esc(i.title)}</b><span class="when">${esc(fmtWhen(i.created_at))}</span></div>
+        <pre class="body" hidden>${esc(i.body)}</pre></div></div>`).join("")}</div>`
+      : `<p class="muted">Reports and alerts will show up here. The next one comes at <span class="mono">${esc(S.report_time)}</span>.</p>`}`;
 }
 async function openItem(id, row) {
   const pre = row.querySelector("pre"); pre.hidden = !pre.hidden;
   const dot = row.querySelector(".unread-dot");
-  if (dot) { dot.className = "read-dot"; await api("read", {id}); S = await api("state"); updateBadge(); }
+  if (dot) { dot.className = "read-dot"; row.classList.remove("unread"); await api("read", {id}); S = await api("state"); updateBadge(); }
 }
 async function readAll() { await api("read", {}); S = await api("state"); renderHome(); }
 function updateBadge() {
