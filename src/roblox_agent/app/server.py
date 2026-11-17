@@ -52,6 +52,8 @@ class App:
             ("GET", "/api/agents"): lambda: s.agents(),
             ("GET", "/api/export-settings"): lambda: s.export_settings(),
             ("GET", "/api/learned"): lambda: s.learned(),
+            ("GET", "/api/funnels"): lambda: s.funnels(),
+            ("POST", "/api/funnels"): lambda: s.plan_funnels(),
             ("POST", "/api/terms"): lambda: s.accept_terms(bool(b.get("agree")), str(b.get("age", "")),
                                                           bool(b.get("guardian_ok"))),
             ("POST", "/api/sharing"): lambda: s.set_sharing(bool(b.get("on"))),

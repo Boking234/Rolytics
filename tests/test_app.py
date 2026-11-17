@@ -27,6 +27,9 @@ GAME_LINK = "https://create.roblox.com/dashboard/creations/experiences/42/overvi
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv(config.HOME_ENV, str(tmp_path / "home"))
     monkeypatch.delenv(config.KEY_ENV, raising=False)
+    from roblox_agent import funnels
+    monkeypatch.setattr(funnels.shutil, "which", lambda name: None)  # never start a real AI agent
+    monkeypatch.setattr(service_mod, "_get_json", lambda url, timeout=8.0: {})  # no internet in tests
     return tmp_path / "home"
 
 
@@ -195,7 +198,8 @@ def test_settings_validation(svc):
 
 
 def test_quiet_hours_wrap_midnight():
-    at = lambda s: datetime.fromisoformat("2026-11-13 " + s)
+    def at(s):
+        return datetime.fromisoformat("2026-11-13 " + s)
     assert in_quiet_hours(at("23:00"), "22:00", "08:00")
     assert in_quiet_hours(at("07:59"), "22:00", "08:00")
     assert not in_quiet_hours(at("12:00"), "22:00", "08:00")

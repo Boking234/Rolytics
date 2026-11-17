@@ -5,7 +5,7 @@ Speaks the Model Context Protocol over stdio (one JSON message per line),
 using only the standard library. Start it with ``roblox-agent mcp``; agents
 start it for you once connected with ``roblox-agent connect``.
 
-Token budget: the tool list is ~400 tokens and a check-up answer is ~100-350
+Token budget: the tool list is ~600 tokens and a check-up answer is ~100-350
 tokens (up to ~600 on the first check-up of a week, which adds the weekly summary). The agent never sees raw data unless it asks for a capped history.
 The API key is read from your local settings and is never sent to the agent.
 """
@@ -17,8 +17,10 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, BinaryIO
 
-from . import __version__, catalog, changes, checkup, config, db, ingest, why
+from . import __version__, catalog, changes, checkup, config, db, funnels, ingest, why
 from .api import AnalyticsClient, ApiError
+
+_funnels = funnels  # add_funnels takes an argument called 'funnels'
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # Newer stateless protocol: no initialize; each request names its version in _meta.
@@ -69,6 +71,18 @@ TOOLS = [
             "required": ["metric"]},
     },
     {
+        "name": "game_context",
+        "description": "The game's genre, description, systems and existing player funnels.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "add_funnels",
+        "description": "Create missing drop-off funnels. Item: {name, kind: onboarding|recurring, steps: [...], "
+                       "why, trigger_hints}.",
+        "inputSchema": {"type": "object", "properties": {"funnels": {"type": "array", "items": {"type": "object"}}},
+                        "required": ["funnels"]},
+    },
+    {
         "name": "list_metrics",
         "description": "Stored metric names and splits.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -78,6 +92,9 @@ TOOLS = [
 PROMPTS = [{
     "name": "daily-checkup",
     "description": "Explain today's Roblox game check-up in plain language",
+}, {
+    "name": "plan-funnels",
+    "description": "Plan player drop-off funnels for this game and create the missing ones",
 }]
 PROMPT_TEXT = ("Call the daily_checkup tool once. Explain the result to a game developer in plain language, "
                "under 120 words: what changed, the likely cause (use its 'Likely cause' when given), and one "
@@ -148,6 +165,15 @@ class Server:
                   for r in reversed(rows) if r["value"] is not None]
         return "\n".join(lines)
 
+    def game_context(self) -> str:
+        ctx = funnels.load_context()
+        if not ctx:
+            ctx, _ = funnels.refresh_context()
+        return funnels.context_text(ctx)
+
+    def add_funnels(self, funnels: list | None = None) -> str:
+        return _funnels.add_text(_funnels.add(funnels or []))
+
     def list_metrics(self) -> str:
         rows = self.conn.execute(
             "SELECT metric, group_concat(DISTINCT breakdown_key) AS keys FROM data_points WHERE universe_id=?"
@@ -199,16 +225,20 @@ class Server:
         if method == "prompts/list":
             return {"prompts": PROMPTS}
         if method == "prompts/get":
-            if params.get("name") != "daily-checkup":
+            texts = {"daily-checkup": PROMPT_TEXT, "plan-funnels": funnels.PLAN_PROMPT}
+            name = params.get("name")
+            if name not in texts:
                 raise _RpcError(-32602, "Unknown prompt")
-            return {"description": PROMPTS[0]["description"],
-                    "messages": [{"role": "user", "content": {"type": "text", "text": PROMPT_TEXT}}]}
+            desc = next(p["description"] for p in PROMPTS if p["name"] == name)
+            return {"description": desc,
+                    "messages": [{"role": "user", "content": {"type": "text", "text": texts[name]}}]}
         if method == "tools/call":
             name = params.get("name")
             args = params.get("arguments") or {}
             fn = {"daily_checkup": self.daily_checkup, "metric_history": self.metric_history,
                   "list_metrics": self.list_metrics, "mark_item": self.mark_item,
-                  "log_change": self.log_change, "player_trend": self.player_trend}.get(name)
+                  "log_change": self.log_change, "player_trend": self.player_trend,
+                  "game_context": self.game_context, "add_funnels": self.add_funnels}.get(name)
             if not fn:
                 raise _RpcError(-32602, f"Unknown tool: {name}")
             try:
