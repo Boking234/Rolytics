@@ -18,7 +18,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from . import catalog, changes, decline, detect
+from . import catalog, changes, decline, detect, priors
 from .checkup import _day, _where, fmt_change
 
 # One headline metric per area, in scorecard order.
@@ -82,7 +82,28 @@ def _mean(pts: list[detect.Point], lo: date, hi: date) -> float | None:
     return sum(vals) / len(vals) if len(vals) >= 5 else None
 
 
-def _area(conn: sqlite3.Connection, uid: int, name: str, metric: str) -> Area:
+def _size(conn: sqlite3.Connection, uid: int) -> float | None:
+    """Typical players a day over the last 4 weeks (how many people are behind the numbers)."""
+    pts = detect.load_series(conn, uid, "DailyActiveUsers", "")
+    if not pts:
+        return None
+    vals = [p.value for p in pts if p.day > pts[-1].day - timedelta(days=28)]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _weekly_noise(metric: str, size: float | None, level: float | None) -> float:
+    """Expected wobble of a 7-day average vs the previous 7-day average, as a share.
+
+    Day-to-day wobble for games this size (public data, see priors.py), shrunk for
+    averaging 7 days, and doubled so only a change well past chance counts. A game
+    with 4 players a day moves 30-40% week to week by chance alone.
+    """
+    day = priors.noise(metric, size, level)
+    return 2 * day * (2 / 7) ** 0.5 if day else 0.0
+
+
+def _area(conn: sqlite3.Connection, uid: int, name: str, metric: str,
+          size: float | None = None) -> Area:
     spec = catalog.get(metric)
     pts = detect.load_series(conn, uid, metric, "")
     if not pts:
@@ -95,7 +116,7 @@ def _area(conn: sqlite3.Connection, uid: int, name: str, metric: str) -> Area:
         return Area(name, metric, "no data", None, None)
     vs_last = (this - last) / abs(last) if last else 0.0
     vs_month = (this - month) / abs(month) if month else None
-    floor = max(STEADY, spec.min_rel / 2)
+    floor = max(STEADY, spec.min_rel / 2, _weekly_noise(metric, size, last))
     if abs(vs_last) < floor:
         verdict = "steady"
     else:
@@ -113,7 +134,8 @@ def _name(row: sqlite3.Row) -> str:
 
 
 def build(conn: sqlite3.Connection, uid: int, latest: date) -> Weekly:
-    w = Weekly(latest, [_area(conn, uid, n, m) for n, m in AREAS])
+    size = _size(conn, uid)
+    w = Weekly(latest, [_area(conn, uid, n, m, size) for n, m in AREAS])
     week_start = latest - timedelta(days=6)
     rows = conn.execute("SELECT * FROM findings WHERE universe_id=? AND good=0", (uid,)).fetchall()
     open_rows = []
